@@ -97,6 +97,11 @@ function savePrefixSuffixRules(r) {
   try { localStorage.setItem(LS_PS_KEY, JSON.stringify(r)); } catch {}
 }
 
+function isTotalRow(row) {
+  const val = String(row.product ?? "").trim().toLowerCase().replace(/[:\s]+$/, "");
+  return val === "total" || val === "grand total" || val === "subtotal" || val === "sub total";
+}
+
 // Apply product-specific rules to a suggested order quantity
 // onHand is needed to evaluate maxOnHandAfter constraint
 function applyProductRule(rule, suggestedQty, onHand) {
@@ -840,6 +845,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const [newCatKey, setNewCatKey] = useState("");
   const [newCatOnHandUom, setNewCatOnHandUom] = useState("");
   const [newCatOrderUom, setNewCatOrderUom] = useState("");
+  const [totalRowsIncluded, setTotalRowsIncluded] = useState(() => new Set());
 
   const buildRows = (productRules, uomMaps = uomMappings, catUom = categoryUomSettings, psRules = prefixSuffixRules) =>
     rawRows.map((r, i) => {
@@ -866,18 +872,19 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       };
       const productId = String(row.product ?? "").trim();
       const rule = (productRules || []).find(ru => String(ru.productId).trim() === productId);
+      const _isTotal = isTotalRow(row);
       const uomConv = getUomConversion(row, productRules, catUom, uomMaps, psRules);
-      const suggested = calcOrder(row, targetDays, uomConv.onHandToOrderFactor);
+      const suggested = _isTotal ? null : calcOrder(row, targetDays, uomConv.onHandToOrderFactor);
       const days_on_hand = calcDaysOnHand(row);
       const onHandNum = parseFloat(row.on_hand);
-      let finalOrder = rule ? applyProductRule(rule, suggested ?? 0, isNaN(onHandNum) ? null : onHandNum) : (suggested ?? 0);
+      let finalOrder = _isTotal ? 0 : (rule ? applyProductRule(rule, suggested ?? 0, isNaN(onHandNum) ? null : onHandNum) : (suggested ?? 0));
       // Apply pack-size rounding when prefix/suffix "unit" mode is active and no product rule case size overrides
-      if (uomConv.isPack && uomConv.packSize > 1 && !uomConv.hasConversion && (!rule || rule.caseSize == null) && finalOrder > 0) {
+      if (!_isTotal && uomConv.isPack && uomConv.packSize > 1 && !uomConv.hasConversion && (!rule || rule.caseSize == null) && finalOrder > 0) {
         finalOrder = Math.ceil(finalOrder / uomConv.packSize) * uomConv.packSize;
       }
       const safeOrder = Math.max(0, finalOrder);
-      const est_on_hand_after = !isNaN(onHandNum) ? onHandNum + safeOrder * uomConv.orderToOnHandFactor : null;
-      return { ...row, suggested, order: safeOrder, days_on_hand, est_on_hand_after, appliedRule: rule || null, uomConv };
+      const est_on_hand_after = !_isTotal && !isNaN(onHandNum) ? onHandNum + safeOrder * uomConv.orderToOnHandFactor : null;
+      return { ...row, suggested, order: safeOrder, days_on_hand, est_on_hand_after, appliedRule: rule || null, uomConv, _isTotal };
     });
 
   const [rows, setRows] = useState(() => buildRows(productRules, uomMappings, categoryUomSettings, prefixSuffixRules));
@@ -974,6 +981,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
 
   const displayed = rows
     .filter(r => {
+      if (r._isTotal && !totalRowsIncluded.has(r._idx)) return false;
       if (hideZero && (Number(r.order) || 0) === 0) return false;
       return COLS.every(c => {
         const cellVal = String(r[c.key] ?? "");
@@ -1652,6 +1660,39 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
             {overMax && <p style={{ color: C.red, fontSize: 12, fontWeight: 700, margin: "6px 0 0" }}>⚠ Order exceeds maximum by {fmt2(trackVal - maxV)}</p>}
             {!overMax && underMin && <p style={{ color: C.orange, fontSize: 12, fontWeight: 700, margin: "6px 0 0" }}>⚠ Order is {fmt2(minV - trackVal)} below minimum</p>}
             {!overMax && !underMin && (minV != null || maxV != null) && <p style={{ color: C.green, fontSize: 12, fontWeight: 700, margin: "6px 0 0" }}>✓ Order is within limits</p>}
+          </div>
+        );
+      })()}
+
+      {/* excluded total rows callout */}
+      {(() => {
+        const excludedTotals = rows.filter(r => r._isTotal && !totalRowsIncluded.has(r._idx));
+        if (!excludedTotals.length) return null;
+        return (
+          <div style={{ background: C.orange + "18", border: `1px solid ${C.orange}55`, borderRadius: 10, padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <span style={{ color: C.orange, fontWeight: 700, fontSize: 13 }}>
+                ⚠ {excludedTotals.length} summary row{excludedTotals.length > 1 ? "s were" : " was"} excluded from the order
+              </span>
+              <button
+                onClick={() => setTotalRowsIncluded(prev => { const s = new Set(prev); excludedTotals.forEach(r => s.add(r._idx)); return s; })}
+                style={{ background: C.orange + "33", border: `1px solid ${C.orange}66`, borderRadius: 6, color: C.orange, fontFamily: "inherit", fontSize: 12, fontWeight: 700, cursor: "pointer", padding: "4px 12px", whiteSpace: "nowrap" }}
+              >Include All</button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {excludedTotals.map(r => (
+                <div key={r._idx} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, background: C.orange + "0e", borderRadius: 6, padding: "4px 10px" }}>
+                  <span style={{ color: C.text, fontSize: 13 }}>
+                    <span style={{ color: C.muted, fontSize: 11, marginRight: 8 }}>{r.location || "—"}</span>
+                    {r.product}
+                  </span>
+                  <button
+                    onClick={() => setTotalRowsIncluded(prev => { const s = new Set(prev); s.add(r._idx); return s; })}
+                    style={{ background: "transparent", border: `1px solid ${C.orange}55`, borderRadius: 6, color: C.orange, fontFamily: "inherit", fontSize: 11, fontWeight: 700, cursor: "pointer", padding: "2px 10px", whiteSpace: "nowrap" }}
+                  >Include →</button>
+                </div>
+              ))}
+            </div>
           </div>
         );
       })()}
