@@ -116,7 +116,7 @@ function applyProductRule(rule, suggestedQty, onHand) {
 function getUomConversion(row, productRules, categoryUomSettings, uomMappings) {
   const productId = String(row.product ?? "").trim();
   const rule = (productRules || []).find(r => String(r.productId).trim() === productId);
-  const onHandUom = (rule?.onHandUom || "").trim() || (row.category && categoryUomSettings?.[row.category]?.onHandUom) || "";
+  const onHandUom = (rule?.onHandUom || "").trim() || (row.uom && String(row.uom).trim()) || (row.category && categoryUomSettings?.[row.category]?.onHandUom) || "";
   const orderUom = (rule?.orderUom || "").trim() || (row.category && categoryUomSettings?.[row.category]?.orderUom) || "";
   if (!onHandUom || !orderUom || onHandUom === orderUom) {
     return { onHandUom, orderUom, onHandToOrderFactor: 1, orderToOnHandFactor: 1, hasConversion: false };
@@ -489,7 +489,7 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
   // optional fields
   const [orderMin, setOrderMin] = useState(init.orderMin ?? "");
   const [orderMax, setOrderMax] = useState(init.orderMax ?? "");
-  const [orderLimitType, setOrderLimitType] = useState(init.orderLimitType || "units");
+  const [orderLimitType, setOrderLimitType] = useState(init.orderLimitType || "dollars");
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
   const showSuggestionBanner = suggestion && !initialState && !suggestionDismissed;
 
@@ -515,7 +515,7 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
     mapping.on_hand,
     fieldMode.leadtime === "column" ? mapping.leadtime : null,
     usageMode === "direct" ? mapping.daily_usage : salesCol,
-    mapping.category, mapping.cost,
+    mapping.category, mapping.cost, mapping.uom,
   ].filter(Boolean);
 
   const currentMapState = () => ({
@@ -693,13 +693,19 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
         )}
       </div>
 
-      {/* optional fields: category + cost */}
+      {/* optional fields: category, cost, uom */}
       <div>
         <p style={{ color: C.muted, fontSize: 12, fontWeight: 700, marginBottom: 10 }}>OPTIONAL FIELDS</p>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
           <OptionalFieldCard field="category" label="Category" />
           <OptionalFieldCard field="cost" label="Cost (per unit)" />
+          <OptionalFieldCard field="uom" label="Unit of Measure" />
         </div>
+        {mapping.uom && (
+          <p style={{ color: C.muted, fontSize: 11, marginTop: 8 }}>
+            UoM column provides per-row on-hand units (e.g. "qt", "gal"). Use the <strong style={{ color: C.purple }}>⚖ UoM Mapping</strong> tab in Product Rules to define conversions and set the order unit.
+          </p>
+        )}
       </div>
 
       {/* order min/max */}
@@ -707,10 +713,11 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
           <div>
             <span style={{ color: C.text, fontWeight: 700 }}>Order Limits</span>
-            <span style={{ color: C.muted, fontSize: 12, marginLeft: 8 }}>optional — flags orders outside range in review</span>
+            <span style={{ color: C.accent, fontWeight: 700, fontSize: 12, marginLeft: 6 }}>{orderLimitType === "dollars" ? "Value ($)" : "Units"}</span>
+            <span style={{ color: C.muted, fontSize: 12, marginLeft: 4 }}>— total order, flags outside range in review</span>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
-            {[["units", "Total Units"], ["dollars", "Total $ Value"]].map(([val, label]) => (
+            {[["dollars", "Total $ Value"], ["units", "Total Units"]].map(([val, label]) => (
               <button key={val} onClick={() => setOrderLimitType(val)} style={{
                 padding: "4px 12px", borderRadius: 6, fontFamily: "inherit", fontWeight: 700, fontSize: 12, cursor: "pointer",
                 border: `1px solid ${orderLimitType === val ? C.accent : C.border}`,
@@ -769,7 +776,8 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
 function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manualEntry, orderLimits, onConfirm, onBack }) {
   const hasCost = !!mapping.cost;
   const hasCategory = !!mapping.category;
-  const limitType = orderLimits?.limitType || "units"; // "units" | "dollars"
+  const hasUom = !!mapping.uom;
+  const limitType = orderLimits?.limitType || "dollars"; // "units" | "dollars"
 
   // Product rules — loaded from localStorage, editable inline
   const [productRules, setProductRules] = useState(() => loadProductRules());
@@ -818,6 +826,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
         daily_usage, on_hand: get("on_hand"), leadtime: get("leadtime"),
         category: hasCategory ? get("category") : "",
         cost: hasCost ? get("cost") : "",
+        uom: hasUom ? get("uom") : "",
       };
       const productId = String(row.product ?? "").trim();
       const rule = (productRules || []).find(ru => String(ru.productId).trim() === productId);
@@ -1314,14 +1323,17 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
               </div>
 
               {/* Category-level UoM defaults */}
-              {hasCategory && (
+              {hasCategory && (() => {
+                const availableCategories = [...new Set(rows.map(r => r.category).filter(Boolean))].sort();
+                return (
                 <div style={{ background: C.surface, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
                   <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 10px" }}>CATEGORY DEFAULTS</p>
                   <p style={{ color: C.muted, fontSize: 12, margin: "0 0 10px" }}>Set UoM for an entire category. Per-product rules override these.</p>
                   <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr auto", gap: 8, alignItems: "end", marginBottom: 10 }}>
                     <div>
                       <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>CATEGORY</label>
-                      <Input value={newCatKey} onChange={e => setNewCatKey(e.target.value)} placeholder="e.g. Paint" style={{ width: "100%" }} />
+                      <datalist id="uom-cat-list">{availableCategories.map(c => <option key={c} value={c} />)}</datalist>
+                      <Input value={newCatKey} onChange={e => setNewCatKey(e.target.value)} placeholder="e.g. Paint" style={{ width: "100%" }} list="uom-cat-list" />
                     </div>
                     <div>
                       <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>ON HAND UOM</label>
@@ -1368,7 +1380,8 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                     </table>
                   )}
                 </div>
-              )}
+                );
+              })()}
             </div>
           )}
 
