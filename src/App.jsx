@@ -97,6 +97,14 @@ function savePrefixSuffixRules(r) {
   try { localStorage.setItem(LS_PS_KEY, JSON.stringify(r)); } catch {}
 }
 
+const LS_TABLE_PREFS_KEY = "ordergen_table_prefs_v1";
+function loadTablePrefs() {
+  try { return JSON.parse(localStorage.getItem(LS_TABLE_PREFS_KEY) || "{}"); } catch { return {}; }
+}
+function saveTablePrefs(p) {
+  try { localStorage.setItem(LS_TABLE_PREFS_KEY, JSON.stringify(p)); } catch {}
+}
+
 function isTotalRow(row) {
   const val = String(row.product ?? "").trim().toLowerCase().replace(/[:\s]+$/, "");
   return val === "total" || val === "grand total" || val === "subtotal" || val === "sub total";
@@ -884,7 +892,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       }
       const safeOrder = Math.max(0, finalOrder);
       const est_on_hand_after = !_isTotal && !isNaN(onHandNum) ? onHandNum + safeOrder * uomConv.orderToOnHandFactor : null;
-      return { ...row, suggested, order: safeOrder, days_on_hand, est_on_hand_after, appliedRule: rule || null, uomConv, _isTotal };
+      return { ...row, suggested, order: safeOrder, days_on_hand, est_on_hand_after, appliedRule: rule || null, uomConv, _isTotal, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "" };
     });
 
   const [rows, setRows] = useState(() => buildRows(productRules, uomMappings, categoryUomSettings, prefixSuffixRules));
@@ -918,7 +926,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       finalOrder = applyPackRounding(finalOrder, rule, uomConv);
       const safeOrder = Math.max(0, finalOrder);
       const est_on_hand_after = !isNaN(onHandNum) ? onHandNum + safeOrder * uomConv.orderToOnHandFactor : null;
-      return { ...r, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, uomConv };
+      return { ...r, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, uomConv, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "" };
     }));
     setTargetLocal(td);
   };
@@ -936,7 +944,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       finalOrder = applyPackRounding(finalOrder, rule, uomConv);
       const safeOrder = Math.max(0, finalOrder);
       const est_on_hand_after = !isNaN(onHandNum) ? onHandNum + safeOrder * uomConv.orderToOnHandFactor : null;
-      return { ...r, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, uomConv };
+      return { ...r, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, uomConv, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "" };
     }));
   };
   const setOrder = (idx, val) => setRows(prev => prev.map(r => {
@@ -962,18 +970,122 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const clearFilters = () => { setColTextFilters({}); setColCheckedFilters({}); };
 
   const COLS = [
-    { key: "location", label: "Location" },
-    { key: "product", label: "Product" },
-    ...(hasCategory ? [{ key: "category", label: "Category" }] : []),
-    { key: "daily_usage", label: usageConfig.mode === "calculated" ? `Daily Usage (÷${usageConfig.salesDays}d)` : "Daily Usage" },
-    { key: "on_hand", label: "On Hand" },
-    { key: "days_on_hand", label: "Days On Hand" },
-    { key: "leadtime", label: "Lead Time" },
-    { key: "suggested", label: "Suggested" },
-    { key: "est_on_hand_after", label: "Est. On Hand After" },
+    { key: "location", label: "Location", defaultWidth: 120 },
+    { key: "product", label: "Product", defaultWidth: 180 },
+    ...(hasCategory ? [{ key: "category", label: "Category", defaultWidth: 120 }] : []),
+    { key: "on_hand_uom", label: "On Hand UoM", defaultWidth: 100 },
+    { key: "daily_usage", label: usageConfig.mode === "calculated" ? `Daily Usage (÷${usageConfig.salesDays}d)` : "Daily Usage", defaultWidth: 120 },
+    { key: "on_hand", label: "On Hand", defaultWidth: 90 },
+    { key: "days_on_hand", label: "Days On Hand", defaultWidth: 110 },
+    { key: "leadtime", label: "Lead Time", defaultWidth: 90 },
+    { key: "suggested", label: "Suggested", defaultWidth: 100 },
+    { key: "est_on_hand_after", label: "Est. On Hand After", defaultWidth: 140 },
+    { key: "order", label: "Order Qty", defaultWidth: 110, noFilter: true },
+    { key: "order_uom", label: "Order UoM", defaultWidth: 100 },
+    ...(hasCost ? [{ key: "ext_cost", label: "Ext. Cost", defaultWidth: 100, noFilter: true, noSort: true }] : []),
   ];
 
+  const _tPrefs = loadTablePrefs();
+  const [savedColOrder, setSavedColOrder] = useState(() => _tPrefs.colOrder ?? null);
+  const [pinnedCols, setPinnedCols] = useState(() => new Set(_tPrefs.pinnedCols ?? ["location", "product"]));
+  const [colWidths, setColWidths] = useState(() => _tPrefs.colWidths ?? {});
+  const dragColRef = useRef(null);
+  const [dragOver, setDragOver] = useState(null);
+
+  const defaultColKeys = COLS.map(c => c.key);
+  const effectiveColOrder = savedColOrder
+    ? [...savedColOrder.filter(k => defaultColKeys.includes(k)), ...defaultColKeys.filter(k => !savedColOrder.includes(k))]
+    : defaultColKeys;
+  const orderedCols = effectiveColOrder.map(k => COLS.find(c => c.key === k)).filter(Boolean);
+  const pinnedOrdered = orderedCols.filter(c => pinnedCols.has(c.key));
+  const unpinnedOrdered = orderedCols.filter(c => !pinnedCols.has(c.key));
+  const displayCols = [...pinnedOrdered, ...unpinnedOrdered];
+  const getColWidth = (key) => colWidths[key] ?? COLS.find(c => c.key === key)?.defaultWidth ?? 120;
+  const pinnedLeftOffsets = {};
+  let _leftAcc = 0;
+  for (const col of pinnedOrdered) { pinnedLeftOffsets[col.key] = _leftAcc; _leftAcc += getColWidth(col.key); }
+
+  const _savePrefs = (order, pinned, widths) => {
+    saveTablePrefs({ colOrder: order ?? effectiveColOrder, pinnedCols: [...(pinned ?? pinnedCols)], colWidths: widths ?? colWidths });
+  };
+  const togglePin = (key) => {
+    const next = new Set(pinnedCols);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    setPinnedCols(next); _savePrefs(null, next, null);
+  };
+  const startResize = (key, e) => {
+    e.preventDefault(); e.stopPropagation();
+    const startX = e.clientX;
+    const startWidth = getColWidth(key);
+    const onMove = (ev) => setColWidths(prev => ({ ...prev, [key]: Math.max(60, startWidth + ev.clientX - startX) }));
+    const onUp = (ev) => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      const newWidths = { ...colWidths, [key]: Math.max(60, startWidth + ev.clientX - startX) };
+      setColWidths(newWidths); _savePrefs(null, null, newWidths);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+  const onDragStart = (key, e) => { dragColRef.current = key; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", key); };
+  const onDragOver = (key, e) => { e.preventDefault(); setDragOver(key); };
+  const onDrop = (key, e) => {
+    e.preventDefault();
+    const from = dragColRef.current;
+    if (!from || from === key) { setDragOver(null); return; }
+    const newOrder = [...effectiveColOrder];
+    const fi = newOrder.indexOf(from), ti = newOrder.indexOf(key);
+    if (fi < 0 || ti < 0) { setDragOver(null); return; }
+    newOrder.splice(fi, 1); newOrder.splice(ti, 0, from);
+    setSavedColOrder(newOrder); setDragOver(null); _savePrefs(newOrder, null, null);
+  };
+  const onDragEnd = () => { dragColRef.current = null; setDragOver(null); };
+
+  const renderCell = (col, r, edited) => {
+    switch (col.key) {
+      case "location": return <span style={{ color: C.text, fontSize: 13 }}>{r.location}</span>;
+      case "product": return (
+        <span style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.product}</span>
+          {r.appliedRule && <span title={`Rule: case=${r.appliedRule.caseSize ?? "—"} min=${r.appliedRule.minQty ?? "—"} max=${r.appliedRule.maxQty ?? "—"}`} style={{ color: C.purple, fontSize: 11, cursor: "help", flexShrink: 0 }}>⚙</span>}
+        </span>
+      );
+      case "category": return <span style={{ color: C.muted, fontSize: 12 }}>{r.category}</span>;
+      case "on_hand_uom": return <span style={{ color: C.muted, fontSize: 12 }}>{r.on_hand_uom || "—"}</span>;
+      case "daily_usage": return <span style={{ color: usageConfig.mode === "calculated" ? C.purple : C.muted, fontSize: 13 }}>{fmtNum(r.daily_usage)}</span>;
+      case "on_hand": return <span style={{ color: C.muted, fontSize: 13 }}>{fmtNum(r.on_hand)}</span>;
+      case "days_on_hand": {
+        const doh = r.days_on_hand;
+        const dohColor = doh === null ? C.muted : doh < 3 ? C.red : doh < 7 ? C.orange : C.green;
+        return <span style={{ color: dohColor, fontWeight: doh !== null && doh < 7 ? 700 : 400, fontSize: 13 }}>{doh === null ? "—" : fmtNum(doh) + "d"}</span>;
+      }
+      case "leadtime": return <span style={{ color: C.muted, fontSize: 13 }}>{fmtNum(r.leadtime)}</span>;
+      case "suggested": return r.suggested === null
+        ? <span style={{ color: C.red, fontSize: 12 }}>N/A</span>
+        : <span style={{ color: r.suggested === 0 ? C.green : C.accent, fontWeight: 700 }}>{fmtNum(r.suggested, 0)}</span>;
+      case "est_on_hand_after": {
+        const eoh = r.est_on_hand_after;
+        if (eoh === null || eoh === undefined) return <span style={{ color: C.muted }}>—</span>;
+        const rule = r.appliedRule;
+        const overMax = rule?.maxOnHandAfter != null && eoh > rule.maxOnHandAfter;
+        const color = overMax ? C.red : eoh === 0 ? C.orange : C.green;
+        return <span style={{ color, fontWeight: 700, fontSize: 13 }} title={overMax ? `Exceeds max on hand after (${rule.maxOnHandAfter})` : undefined}>{fmtNum(eoh, 0)}{overMax ? " ⚠" : ""}</span>;
+      }
+      case "order": return (
+        <Input type="number" min={0} value={r.order} onChange={e => setOrder(r._idx, e.target.value)}
+          style={{ width: "100%", textAlign: "right", borderColor: edited ? C.orange : C.border }} />
+      );
+      case "order_uom": return <span style={{ color: C.muted, fontSize: 12 }}>{r.order_uom || "—"}</span>;
+      case "ext_cost": {
+        const extCost = !isNaN(parseFloat(r.cost)) ? parseFloat(r.cost) * (Number(r.order) || 0) : null;
+        return <span style={{ color: C.muted, fontSize: 12 }}>{extCost !== null ? fmtCurrency(extCost) : "—"}</span>;
+      }
+      default: return <span style={{ color: C.muted, fontSize: 12 }}>{String(r[col.key] ?? "")}</span>;
+    }
+  };
+
   const activeFilterCount = COLS.filter(c => {
+    if (c.noFilter) return false;
     const txt = colTextFilters[c.key] || "";
     const chk = colCheckedFilters[c.key];
     return txt || (chk && chk.mode === "some");
@@ -984,11 +1096,10 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       if (r._isTotal && !totalRowsIncluded.has(r._idx)) return false;
       if (hideZero && (Number(r.order) || 0) === 0) return false;
       return COLS.every(c => {
+        if (c.noFilter) return true;
         const cellVal = String(r[c.key] ?? "");
-        // text filter
         const txt = (colTextFilters[c.key] || "").toLowerCase();
         if (txt && !cellVal.toLowerCase().includes(txt)) return false;
-        // checkbox filter: mode="all" means no restriction; mode="some" means must be in values
         const chk = colCheckedFilters[c.key];
         if (chk && chk.mode === "some") {
           if (!chk.values.has(cellVal)) return false;
@@ -1710,109 +1821,89 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
 
       {/* table */}
       <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "60vh", borderRadius: 12, border: `1px solid ${C.border}` }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "inherit" }}>
+        <table style={{ borderCollapse: "collapse", fontFamily: "inherit", tableLayout: "fixed", width: displayCols.reduce((s, c) => s + getColWidth(c.key), 0) + 50 }}>
+          <colgroup>
+            {displayCols.map(col => <col key={col.key} style={{ width: getColWidth(col.key) }} />)}
+            <col style={{ width: 50 }} />
+          </colgroup>
           <thead style={{ position: "sticky", top: 0, zIndex: 10 }}>
-            {/* sort headers */}
             <tr style={{ background: C.card, borderBottom: `1px solid ${C.border}` }}>
-              {COLS.map((c) => {
-                const isLoc = c.key === "location";
-                const isProd = c.key === "product";
-                const frozenStyle = isLoc
-                  ? { position: "sticky", top: 0, left: 0, zIndex: 20, background: C.card, boxShadow: `inset 0 -1px 0 ${C.border}, inset -1px 0 0 ${C.border}`, minWidth: 120, maxWidth: 120 }
-                  : isProd
-                  ? { position: "sticky", top: 0, left: 120, zIndex: 20, background: C.card, boxShadow: `inset 0 -1px 0 ${C.border}, inset -2px 0 0 ${C.accentDim}`, minWidth: 160, maxWidth: 160 }
-                  : { position: "sticky", top: 0, background: C.card, boxShadow: "inset 0 -1px 0 " + C.border };
+              {displayCols.map((col, ci) => {
+                const isPinned = pinnedCols.has(col.key);
+                const isLastPinned = isPinned && (ci === displayCols.length - 1 || !pinnedCols.has(displayCols[ci + 1].key));
+                const leftOff = isPinned ? pinnedLeftOffsets[col.key] : undefined;
                 return (
-                  <th key={c.key} style={{ padding: "10px 12px", textAlign: "left", ...frozenStyle }}>
-                    <SortBtn k={c.key} label={c.label} align="left" />
+                  <th key={col.key} style={{ padding: "10px 10px 10px 8px", textAlign: "left", position: "sticky", top: 0,
+                    ...(isPinned ? { left: leftOff, zIndex: 20, background: C.card, boxShadow: isLastPinned ? `inset 0 -1px 0 ${C.border}, inset -2px 0 0 ${C.accentDim}` : `inset 0 -1px 0 ${C.border}, inset -1px 0 0 ${C.border}` }
+                      : { zIndex: 10, background: C.card, boxShadow: `inset 0 -1px 0 ${C.border}` }),
+                    borderLeft: dragOver === col.key && dragColRef.current !== col.key ? `2px solid ${C.accent}` : undefined,
+                    overflow: "hidden", userSelect: "none" }}
+                    onDragOver={e => onDragOver(col.key, e)}
+                    onDrop={e => onDrop(col.key, e)}
+                    onDragLeave={() => setDragOver(null)}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 3, minWidth: 0 }}>
+                      <span draggable onDragStart={e => onDragStart(col.key, e)} onDragEnd={onDragEnd}
+                        style={{ cursor: "grab", color: C.border, fontSize: 13, flexShrink: 0, lineHeight: 1 }} title="Drag to reorder">⠿</span>
+                      {col.noSort
+                        ? <span style={{ color: C.muted, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", flex: 1, letterSpacing: 0.5 }}>{col.label.toUpperCase()}</span>
+                        : <SortBtn k={col.key} label={col.label} align="left" />}
+                      <button onClick={() => togglePin(col.key)} title={isPinned ? "Unpin column" : "Pin to left"}
+                        style={{ background: "none", border: "none", cursor: "pointer", padding: "0 1px", fontSize: 11, color: isPinned ? C.accent : C.border, flexShrink: 0, lineHeight: 1, opacity: isPinned ? 1 : 0.5 }}>📌</button>
+                    </div>
+                    <div onMouseDown={e => startResize(col.key, e)}
+                      style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 6, cursor: "col-resize", zIndex: 1 }} />
                   </th>
                 );
               })}
-              <th style={{ padding: "10px 12px", textAlign: "right", color: C.muted, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", position: "sticky", top: 0, background: C.card, boxShadow: "inset 0 -1px 0 " + C.border }}>ORDER QTY</th>
-              {hasCost && <th style={{ padding: "10px 12px", textAlign: "right", color: C.muted, fontSize: 12, fontWeight: 700, position: "sticky", top: 0, background: C.card, boxShadow: "inset 0 -1px 0 " + C.border }}>EXT. COST</th>}
-              <th style={{ padding: "10px 12px", width: 50, position: "sticky", top: 0, background: C.card, boxShadow: "inset 0 -1px 0 " + C.border }} />
+              <th style={{ padding: "10px 12px", width: 50, position: "sticky", top: 0, zIndex: 10, background: C.card, boxShadow: `inset 0 -1px 0 ${C.border}` }} />
             </tr>
-            {/* filter row — also sticky, sits just below the header row */}
             <tr style={{ background: C.surface, borderBottom: `1px solid ${C.border}` }}>
-              {COLS.map((c) => {
-                const isLoc = c.key === "location";
-                const isProd = c.key === "product";
-                const frozenStyle = isLoc
-                  ? { position: "sticky", top: 41, left: 0, zIndex: 20, background: C.surface, boxShadow: `inset 0 -1px 0 ${C.border}, inset -1px 0 0 ${C.border}`, minWidth: 120, maxWidth: 120 }
-                  : isProd
-                  ? { position: "sticky", top: 41, left: 120, zIndex: 20, background: C.surface, boxShadow: `inset 0 -1px 0 ${C.border}, inset -2px 0 0 ${C.accentDim}`, minWidth: 160, maxWidth: 160 }
-                  : { position: "sticky", top: 41, background: C.surface, boxShadow: "inset 0 -1px 0 " + C.border };
+              {displayCols.map((col, ci) => {
+                const isPinned = pinnedCols.has(col.key);
+                const isLastPinned = isPinned && (ci === displayCols.length - 1 || !pinnedCols.has(displayCols[ci + 1].key));
+                const leftOff = isPinned ? pinnedLeftOffsets[col.key] : undefined;
                 return (
-                  <th key={c.key} style={{ padding: "4px 8px", ...frozenStyle }}>
-                    <ColumnFilter
-                      colKey={c.key}
-                      rows={rows}
-                      textValue={colTextFilters[c.key] || ""}
-                      onTextChange={val => setTextFilter(c.key, val)}
-                      checkedFilter={colCheckedFilters[c.key] || { mode: "all", values: new Set() }}
-                      onCheckedChange={cf => setCheckedFilter(c.key, cf)}
-                    />
+                  <th key={col.key} style={{ padding: "4px 8px", position: "sticky", top: 41,
+                    ...(isPinned ? { left: leftOff, zIndex: 20, background: C.surface, boxShadow: isLastPinned ? `inset 0 -1px 0 ${C.border}, inset -2px 0 0 ${C.accentDim}` : `inset 0 -1px 0 ${C.border}, inset -1px 0 0 ${C.border}` }
+                      : { zIndex: 10, background: C.surface, boxShadow: `inset 0 -1px 0 ${C.border}` }),
+                    overflow: "hidden" }}>
+                    {!col.noFilter && (
+                      <ColumnFilter colKey={col.key} rows={rows}
+                        textValue={colTextFilters[col.key] || ""}
+                        onTextChange={val => setTextFilter(col.key, val)}
+                        checkedFilter={colCheckedFilters[col.key] || { mode: "all", values: new Set() }}
+                        onCheckedChange={cf => setCheckedFilter(col.key, cf)} />
+                    )}
                   </th>
                 );
               })}
-              <th style={{ padding: "4px 8px", position: "sticky", top: 41, background: C.surface, boxShadow: "inset 0 -1px 0 " + C.border }} />
-              {hasCost && <th style={{ padding: "4px 8px", position: "sticky", top: 41, background: C.surface, boxShadow: "inset 0 -1px 0 " + C.border }} />}
-              <th style={{ position: "sticky", top: 41, background: C.surface, boxShadow: "inset 0 -1px 0 " + C.border }} />
+              <th style={{ position: "sticky", top: 41, zIndex: 10, background: C.surface, boxShadow: `inset 0 -1px 0 ${C.border}` }} />
             </tr>
           </thead>
           <tbody>
             {displayed.length === 0 ? (
-              <tr><td colSpan={COLS.length + (hasCost ? 3 : 2)} style={{ padding: "24px", textAlign: "center", color: C.muted }}>No rows match the current filters.</td></tr>
+              <tr><td colSpan={displayCols.length + 1} style={{ padding: "24px", textAlign: "center", color: C.muted }}>No rows match the current filters.</td></tr>
             ) : displayed.map(r => {
               const edited = r.order !== r.suggested;
-              const orderNum = Number(r.order) || 0;
-              const extCost = hasCost && !isNaN(parseFloat(r.cost)) ? parseFloat(r.cost) * orderNum : null;
-              const doh = r.days_on_hand;
-              const dohColor = doh === null ? C.muted : doh < 3 ? C.red : doh < 7 ? C.orange : C.green;
+              const cellBg = edited ? "#2a2210" : C.bg;
+              const numericKeys = new Set(["daily_usage","on_hand","days_on_hand","leadtime","suggested","est_on_hand_after","order","ext_cost"]);
               return (
                 <tr key={r._idx} style={{ borderBottom: `1px solid ${C.border}`, background: edited ? C.orange + "08" : "transparent" }}>
-                  <td style={{ padding: "9px 12px", color: C.text, fontSize: 13, position: "sticky", left: 0, zIndex: 5, background: edited ? "#2a2210" : C.bg, minWidth: 120, maxWidth: 120, boxShadow: `inset -1px 0 0 ${C.border}` }}>{r.location}</td>
-                  <td style={{ padding: "9px 12px", color: C.text, fontWeight: 600, fontSize: 13, position: "sticky", left: 120, zIndex: 5, background: edited ? "#2a2210" : C.bg, minWidth: 160, maxWidth: 160, boxShadow: `inset -2px 0 0 ${C.accentDim}`, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                      {r.product}
-                      {r.appliedRule && <span title={`Rule: case=${r.appliedRule.caseSize ?? "—"} min=${r.appliedRule.minQty ?? "—"} max=${r.appliedRule.maxQty ?? "—"}`} style={{ color: C.purple, fontSize: 11, cursor: "help" }}>⚙</span>}
-                    </span>
-                  </td>
-                  {hasCategory && <td style={{ padding: "9px 12px", color: C.muted, fontSize: 12 }}>{r.category}</td>}
-                  <td style={{ padding: "9px 12px", color: usageConfig.mode === "calculated" ? C.purple : C.muted, fontSize: 13, textAlign: "right" }}>{fmtNum(r.daily_usage)}</td>
-                  <td style={{ padding: "9px 12px", color: C.muted, fontSize: 13, textAlign: "right" }}>{fmtNum(r.on_hand)}</td>
-                  <td style={{ padding: "9px 12px", textAlign: "right" }}>
-                    <span style={{ color: dohColor, fontWeight: doh !== null && doh < 7 ? 700 : 400, fontSize: 13 }}>
-                      {doh === null ? "—" : fmtNum(doh) + "d"}
-                    </span>
-                  </td>
-                  <td style={{ padding: "9px 12px", color: C.muted, fontSize: 13, textAlign: "right" }}>{fmtNum(r.leadtime)}</td>
-                  <td style={{ padding: "9px 12px", textAlign: "right" }}>
-                    {r.suggested === null ? <span style={{ color: C.red, fontSize: 12 }}>N/A</span>
-                      : <span style={{ color: r.suggested === 0 ? C.green : C.accent, fontWeight: 700 }}>{fmtNum(r.suggested, 0)}</span>}
-                  </td>
-                  <td style={{ padding: "9px 12px", textAlign: "right" }}>
-                    {(() => {
-                      const eoh = r.est_on_hand_after;
-                      if (eoh === null || eoh === undefined) return <span style={{ color: C.muted }}>—</span>;
-                      // Color: compare against maxOnHandAfter rule if present
-                      const rule = r.appliedRule;
-                      const overMax = rule?.maxOnHandAfter != null && eoh > rule.maxOnHandAfter;
-                      const color = overMax ? C.red : eoh === 0 ? C.orange : C.green;
-                      return (
-                        <span style={{ color, fontWeight: 700, fontSize: 13 }} title={overMax ? `Exceeds max on hand after (${rule.maxOnHandAfter})` : undefined}>
-                          {fmtNum(eoh, 0)}{overMax ? " ⚠" : ""}
-                        </span>
-                      );
-                    })()}
-                  </td>
-                  <td style={{ padding: "9px 12px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                      <Input type="number" min={0} value={r.order} onChange={(e) => setOrder(r._idx, e.target.value)}
-                        style={{ width: 80, textAlign: "right", borderColor: edited ? C.orange : C.border }} />
-                    </div>
-                  </td>
-                  {hasCost && <td style={{ padding: "9px 12px", color: C.muted, fontSize: 12, textAlign: "right" }}>{extCost !== null ? fmtCurrency(extCost) : "—"}</td>}
+                  {displayCols.map((col, ci) => {
+                    const isPinned = pinnedCols.has(col.key);
+                    const isLastPinned = isPinned && (ci === displayCols.length - 1 || !pinnedCols.has(displayCols[ci + 1].key));
+                    const leftOff = isPinned ? pinnedLeftOffsets[col.key] : undefined;
+                    return (
+                      <td key={col.key} style={{ padding: col.key === "order" ? "5px 8px" : "9px 8px 9px 10px",
+                        textAlign: numericKeys.has(col.key) ? "right" : "left",
+                        overflow: "hidden",
+                        ...(isPinned ? { position: "sticky", left: leftOff, zIndex: 5, background: cellBg,
+                          boxShadow: isLastPinned ? `inset -2px 0 0 ${C.accentDim}` : `inset -1px 0 0 ${C.border}` } : {}) }}>
+                        {renderCell(col, r, edited)}
+                      </td>
+                    );
+                  })}
                   <td style={{ padding: "9px 6px" }}>
                     {edited && <Btn small variant="ghost" onClick={() => resetOne(r._idx)}>↩</Btn>}
                   </td>
