@@ -12,9 +12,9 @@ const fmtCurrency = (n) =>
     ? "—"
     : "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-function calcOrder(row, targetDays, onHandToOrderFactor = 1) {
+function calcOrder(row, targetDays, onHandToOrderFactor = 1, onHandOverride = null) {
   const usage = parseFloat(row.daily_usage);
-  const onHand = parseFloat(row.on_hand);
+  const onHand = onHandOverride ?? parseFloat(row.on_hand);
   const lead = parseFloat(row.leadtime);
   if (isNaN(usage) || isNaN(onHand) || isNaN(lead)) return null;
   return Math.ceil(Math.max(0, (usage * (lead + targetDays) - onHand) * onHandToOrderFactor));
@@ -108,6 +108,82 @@ function saveTablePrefs(p) {
 function isTotalRow(row) {
   const val = String(row.product ?? "").trim().toLowerCase().replace(/[:\s]+$/, "");
   return val === "total" || val === "grand total" || val === "subtotal" || val === "sub total";
+}
+
+function buildPendingIndex(po) {
+  if (!po.rawRows || !po.colMap.product || !po.colMap.qty) return new Map();
+  const locI = po.headers.indexOf(po.colMap.location);
+  const prodI = po.headers.indexOf(po.colMap.product);
+  const qtyI = po.headers.indexOf(po.colMap.qty);
+  if (prodI < 0 || qtyI < 0) return new Map();
+  return po.rawRows.reduce((m, row) => {
+    const loc = locI >= 0 ? String(row[locI] ?? "").trim() : "";
+    const prod = String(row[prodI] ?? "").trim();
+    if (!prod) return m;
+    const key = `${loc}|${prod}`.toLowerCase();
+    const qty = parseFloat(String(row[qtyI] ?? "")) || 0;
+    m.set(key, (m.get(key) || 0) + qty);
+    return m;
+  }, new Map());
+}
+
+function autoPendingColMap(headers) {
+  const norm = h => h.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const loc = headers.find(h => ["location","loc","store","site","warehouse"].includes(norm(h))) || "";
+  const prod = headers.find(h => ["product","productid","item","itemid","sku","productname","prodid","itemno"].includes(norm(h))) || "";
+  const qty = headers.find(h => ["quantity","qty","qtyordered","orderqty","units","ordered","qtyorder"].includes(norm(h))) || "";
+  return { location: loc, product: prod, qty };
+}
+
+function detectPrefixSuffixPatterns(productIds, ignoredKeys = new Set()) {
+  if (productIds.length < 2) return [];
+  const total = productIds.length;
+  const minCount = Math.max(2, Math.ceil(total * 0.03));
+  const prefixCounts = new Map();
+  const suffixCounts = new Map();
+  productIds.forEach(id => {
+    const up = String(id).trim().toUpperCase();
+    if (!up) return;
+    for (let len = 1; len <= 3; len++) {
+      if (up.length > len + 1) {
+        const pre = up.slice(0, len);
+        if (/^[A-Z]+$/.test(pre)) prefixCounts.set(pre, (prefixCounts.get(pre) || 0) + 1);
+        const suf = up.slice(-len);
+        if (/^[A-Z]+$/.test(suf)) suffixCounts.set(suf, (suffixCounts.get(suf) || 0) + 1);
+      }
+    }
+  });
+  const results = [];
+  const validPrefixes = [], validSuffixes = [];
+  prefixCounts.forEach((count, pre) => {
+    if (count >= minCount && count < total * 0.9 && !ignoredKeys.has(`prefix:${pre}`)) {
+      validPrefixes.push(pre);
+      const examples = productIds.filter(id => String(id).toUpperCase().startsWith(pre)).slice(0, 3);
+      results.push({ type: "prefix", text: pre, count, examples, key: `prefix:${pre}` });
+    }
+  });
+  suffixCounts.forEach((count, suf) => {
+    if (count >= minCount && count < total * 0.9 && !ignoredKeys.has(`suffix:${suf}`)) {
+      validSuffixes.push(suf);
+      const examples = productIds.filter(id => String(id).toUpperCase().endsWith(suf)).slice(0, 3);
+      results.push({ type: "suffix", text: suf, count, examples, key: `suffix:${suf}` });
+    }
+  });
+  validPrefixes.forEach(pre => {
+    validSuffixes.forEach(suf => {
+      if (pre === suf) return;
+      const key = `both:${pre}:${suf}`;
+      if (ignoredKeys.has(key)) return;
+      const matching = productIds.filter(id => {
+        const up = String(id).toUpperCase();
+        return up.startsWith(pre) && up.endsWith(suf) && up.length > pre.length + suf.length;
+      });
+      if (matching.length >= minCount) {
+        results.push({ type: "both", prefix: pre, suffix: suf, text: `${pre}…${suf}`, count: matching.length, examples: matching.slice(0, 3), key });
+      }
+    });
+  });
+  return results.sort((a, b) => b.count - a.count);
 }
 
 // Apply product-specific rules to a suggested order quantity
@@ -854,8 +930,16 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const [newCatOnHandUom, setNewCatOnHandUom] = useState("");
   const [newCatOrderUom, setNewCatOrderUom] = useState("");
   const [totalRowsIncluded, setTotalRowsIncluded] = useState(() => new Set());
+  const [pendingOrders, setPendingOrders] = useState([]);
+  const [pendingExpanded, setPendingExpanded] = useState(false);
+  const pendingFileRef = useRef();
+  const [pendingUploadIdx, setPendingUploadIdx] = useState(0);
+  const [psIgnored, setPsIgnored] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("ordergen_ps_ignored_v1") || "[]")); } catch { return new Set(); }
+  });
+  const [psDetected, setPsDetected] = useState(null);
 
-  const buildRows = (productRules, uomMaps = uomMappings, catUom = categoryUomSettings, psRules = prefixSuffixRules) =>
+  const buildRows = (productRules, uomMaps = uomMappings, catUom = categoryUomSettings, psRules = prefixSuffixRules, pendingOrdrs = []) =>
     rawRows.map((r, i) => {
       const get = (field) => {
         if (manualEntry?.fieldMode?.[field] === "manual") return trimVal(manualEntry.manualValues?.[field] ?? "");
@@ -882,17 +966,21 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       const rule = (productRules || []).find(ru => String(ru.productId).trim() === productId);
       const _isTotal = isTotalRow(row);
       const uomConv = getUomConversion(row, productRules, catUom, uomMaps, psRules);
-      const suggested = _isTotal ? null : calcOrder(row, targetDays, uomConv.onHandToOrderFactor);
       const days_on_hand = calcDaysOnHand(row);
       const onHandNum = parseFloat(row.on_hand);
-      let finalOrder = _isTotal ? 0 : (rule ? applyProductRule(rule, suggested ?? 0, isNaN(onHandNum) ? null : onHandNum) : (suggested ?? 0));
-      // Apply pack-size rounding when prefix/suffix "unit" mode is active and no product rule case size overrides
+      const pendingKey = `${String(row.location || "").trim()}|${String(row.product || "").trim()}`.toLowerCase();
+      const pendingQtyTotal = pendingOrdrs.reduce((s, po) => s + (po._index?.get(pendingKey) ?? 0), 0);
+      const effectiveOnHand = isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal;
+      const suggested = _isTotal ? null : calcOrder(row, targetDays, uomConv.onHandToOrderFactor, effectiveOnHand);
+      let finalOrder = _isTotal ? 0 : (rule ? applyProductRule(rule, suggested ?? 0, effectiveOnHand) : (suggested ?? 0));
       if (!_isTotal && uomConv.isPack && uomConv.packSize > 1 && !uomConv.hasConversion && (!rule || rule.caseSize == null) && finalOrder > 0) {
         finalOrder = Math.ceil(finalOrder / uomConv.packSize) * uomConv.packSize;
       }
       const safeOrder = Math.max(0, finalOrder);
-      const est_on_hand_after = !_isTotal && !isNaN(onHandNum) ? onHandNum + safeOrder * uomConv.orderToOnHandFactor : null;
-      return { ...row, suggested, order: safeOrder, days_on_hand, est_on_hand_after, appliedRule: rule || null, uomConv, _isTotal, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "" };
+      const est_on_hand_after = !_isTotal && !isNaN(onHandNum) ? onHandNum + pendingQtyTotal + safeOrder * uomConv.orderToOnHandFactor : null;
+      const pendingQtys = {};
+      pendingOrdrs.forEach(po => { pendingQtys[`pending_${po.id}`] = po._index?.get(pendingKey) ?? 0; });
+      return { ...row, suggested, order: safeOrder, days_on_hand, est_on_hand_after, appliedRule: rule || null, uomConv, _isTotal, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "", ...pendingQtys };
     });
 
   const [rows, setRows] = useState(() => buildRows(productRules, uomMappings, categoryUomSettings, prefixSuffixRules));
@@ -912,21 +1000,27 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
     return finalOrder;
   };
 
-  const recalc = (td, rulesOverride, uomOverride, catUomOverride, psOverride) => {
+  const recalc = (td, rulesOverride, uomOverride, catUomOverride, psOverride, pendingOverride) => {
     const rules = rulesOverride ?? productRules;
     const uomMaps = uomOverride ?? uomMappings;
     const catUom = catUomOverride ?? categoryUomSettings;
     const psRules = psOverride ?? prefixSuffixRules;
+    const poList = pendingOverride ?? pendingOrders;
     setRows(prev => prev.map(r => {
+      const pendingKey = `${String(r.location || "").trim()}|${String(r.product || "").trim()}`.toLowerCase();
+      const pendingQtyTotal = poList.reduce((s, po) => s + (po._index?.get(pendingKey) ?? 0), 0);
       const uomConv = getUomConversion(r, rules, catUom, uomMaps, psRules);
-      const s = calcOrder(r, td, uomConv.onHandToOrderFactor);
-      const rule = rules.find(ru => String(ru.productId).trim() === String(r.product ?? "").trim());
       const onHandNum = parseFloat(r.on_hand);
-      let finalOrder = rule ? applyProductRule(rule, s ?? 0, isNaN(onHandNum) ? null : onHandNum) : (s ?? 0);
+      const effectiveOnHand = isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal;
+      const s = r._isTotal ? null : calcOrder(r, td, uomConv.onHandToOrderFactor, effectiveOnHand);
+      const rule = rules.find(ru => String(ru.productId).trim() === String(r.product ?? "").trim());
+      let finalOrder = rule ? applyProductRule(rule, s ?? 0, effectiveOnHand) : (s ?? 0);
       finalOrder = applyPackRounding(finalOrder, rule, uomConv);
       const safeOrder = Math.max(0, finalOrder);
-      const est_on_hand_after = !isNaN(onHandNum) ? onHandNum + safeOrder * uomConv.orderToOnHandFactor : null;
-      return { ...r, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, uomConv, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "" };
+      const est_on_hand_after = r._isTotal || isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal + safeOrder * uomConv.orderToOnHandFactor;
+      const pendingQtys = {};
+      poList.forEach(po => { pendingQtys[`pending_${po.id}`] = po._index?.get(pendingKey) ?? 0; });
+      return { ...r, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, uomConv, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "", ...pendingQtys };
     }));
     setTargetLocal(td);
   };
@@ -935,16 +1029,22 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
     const uomMaps = uomOverride ?? uomMappings;
     const catUom = catUomOverride ?? categoryUomSettings;
     const psRules = psOverride ?? prefixSuffixRules;
+    const poList = pendingOrders;
     setRows(prev => prev.map(r => {
+      const pendingKey = `${String(r.location || "").trim()}|${String(r.product || "").trim()}`.toLowerCase();
+      const pendingQtyTotal = poList.reduce((s, po) => s + (po._index?.get(pendingKey) ?? 0), 0);
       const uomConv = getUomConversion(r, rules, catUom, uomMaps, psRules);
-      const s = calcOrder(r, targetLocal, uomConv.onHandToOrderFactor);
-      const rule = rules.find(ru => String(ru.productId).trim() === String(r.product ?? "").trim());
       const onHandNum = parseFloat(r.on_hand);
-      let finalOrder = rule ? applyProductRule(rule, s ?? 0, isNaN(onHandNum) ? null : onHandNum) : (s ?? 0);
+      const effectiveOnHand = isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal;
+      const s = r._isTotal ? null : calcOrder(r, targetLocal, uomConv.onHandToOrderFactor, effectiveOnHand);
+      const rule = rules.find(ru => String(ru.productId).trim() === String(r.product ?? "").trim());
+      let finalOrder = rule ? applyProductRule(rule, s ?? 0, effectiveOnHand) : (s ?? 0);
       finalOrder = applyPackRounding(finalOrder, rule, uomConv);
       const safeOrder = Math.max(0, finalOrder);
-      const est_on_hand_after = !isNaN(onHandNum) ? onHandNum + safeOrder * uomConv.orderToOnHandFactor : null;
-      return { ...r, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, uomConv, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "" };
+      const est_on_hand_after = r._isTotal || isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal + safeOrder * uomConv.orderToOnHandFactor;
+      const pendingQtys = {};
+      poList.forEach(po => { pendingQtys[`pending_${po.id}`] = po._index?.get(pendingKey) ?? 0; });
+      return { ...r, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, uomConv, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "", ...pendingQtys };
     }));
   };
   const setOrder = (idx, val) => setRows(prev => prev.map(r => {
@@ -964,6 +1064,73 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
     return { ...r, order: o, est_on_hand_after };
   }));
   const resetAll = () => recalc(targetLocal);
+
+  const applyPendingToRows = (poList) => {
+    setRows(prev => prev.map(r => {
+      const pendingKey = `${String(r.location || "").trim()}|${String(r.product || "").trim()}`.toLowerCase();
+      const pendingQtyTotal = poList.reduce((s, po) => s + (po._index?.get(pendingKey) ?? 0), 0);
+      const onHandNum = parseFloat(r.on_hand);
+      const effectiveOnHand = isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal;
+      const uomConv = r.uomConv ?? { onHandToOrderFactor: 1, orderToOnHandFactor: 1 };
+      const s = r._isTotal ? null : calcOrder(r, targetLocal, uomConv.onHandToOrderFactor ?? 1, effectiveOnHand);
+      const rule = r.appliedRule;
+      const wasEdited = r.order !== r.suggested;
+      let newOrder;
+      if (wasEdited) {
+        newOrder = r.order;
+      } else {
+        let fo = rule ? applyProductRule(rule, s ?? 0, effectiveOnHand) : (s ?? 0);
+        fo = applyPackRounding(fo, rule, uomConv);
+        newOrder = Math.max(0, fo);
+      }
+      const est_on_hand_after = r._isTotal || isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal + newOrder * (uomConv.orderToOnHandFactor ?? 1);
+      const pendingQtys = {};
+      poList.forEach(po => { pendingQtys[`pending_${po.id}`] = po._index?.get(pendingKey) ?? 0; });
+      return { ...r, suggested: s, order: newOrder, est_on_hand_after, ...pendingQtys };
+    }));
+  };
+
+  const handlePendingFile = (slotIdx, file) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+        if (data.length < 2) return;
+        const hdrs = data[0].map(h => String(h).trim());
+        const rawR = data.slice(1).filter(row => row.some(c => String(c).trim() !== ""));
+        const colMap = autoPendingColMap(hdrs);
+        const po = { id: Date.now() + slotIdx, filename: file.name, headers: hdrs, rawRows: rawR, colMap, deliveryMode: "days", deliveryDate: "", leadtimeDays: "" };
+        po._index = buildPendingIndex(po);
+        const next = [...pendingOrders];
+        while (next.length <= slotIdx) next.push(null);
+        next[slotIdx] = po;
+        const filtered = next.filter(Boolean);
+        setPendingOrders(filtered);
+        applyPendingToRows(filtered);
+      } catch {}
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const removePendingOrder = (id) => {
+    const next = pendingOrders.filter(po => po.id !== id);
+    setPendingOrders(next);
+    applyPendingToRows(next);
+  };
+
+  const updatePendingOrderMeta = (id, updates) => {
+    const next = pendingOrders.map(po => {
+      if (po.id !== id) return po;
+      const updated = { ...po, ...updates };
+      if ("colMap" in updates) updated._index = buildPendingIndex(updated);
+      return updated;
+    });
+    setPendingOrders(next);
+    if ("colMap" in updates) applyPendingToRows(next);
+  };
+
   const sort = (key) => { if (sortKey === key) setSortDir(d => -d); else { setSortKey(key); setSortDir(1); } };
   const setTextFilter = (key, val) => setColTextFilters(f => ({ ...f, [key]: val }));
   const setCheckedFilter = (key, set) => setColCheckedFilters(f => ({ ...f, [key]: set }));
@@ -980,6 +1147,11 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
     { key: "leadtime", label: "Lead Time", defaultWidth: 90 },
     { key: "suggested", label: "Suggested", defaultWidth: 100 },
     { key: "est_on_hand_after", label: "Est. On Hand After", defaultWidth: 140 },
+    ...pendingOrders.map((po, i) => ({
+      key: `pending_${po.id}`,
+      label: `Pending ${i + 1}${po.deliveryDate ? ` (${po.deliveryDate})` : po.leadtimeDays ? ` +${po.leadtimeDays}d` : ""}`,
+      defaultWidth: 100, noFilter: true, noSort: true,
+    })),
     { key: "order", label: "Order Qty", defaultWidth: 110, noFilter: true },
     { key: "order_uom", label: "Order UoM", defaultWidth: 100 },
     ...(hasCost ? [{ key: "ext_cost", label: "Ext. Cost", defaultWidth: 100, noFilter: true, noSort: true }] : []),
@@ -1080,7 +1252,13 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
         const extCost = !isNaN(parseFloat(r.cost)) ? parseFloat(r.cost) * (Number(r.order) || 0) : null;
         return <span style={{ color: C.muted, fontSize: 12 }}>{extCost !== null ? fmtCurrency(extCost) : "—"}</span>;
       }
-      default: return <span style={{ color: C.muted, fontSize: 12 }}>{String(r[col.key] ?? "")}</span>;
+      default: {
+        if (col.key.startsWith("pending_")) {
+          const qty = r[col.key] ?? 0;
+          return <span style={{ color: qty > 0 ? C.green : C.muted, fontWeight: qty > 0 ? 700 : 400, fontSize: 13 }}>{qty > 0 ? fmtNum(qty, 0) : "—"}</span>;
+        }
+        return <span style={{ color: C.muted, fontSize: 12 }}>{String(r[col.key] ?? "")}</span>;
+      }
     }
   };
 
@@ -1432,6 +1610,34 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
           {/* ── UOM MAPPING TAB ── */}
           {rulesTab === "uom" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 16, marginBottom: 14 }}>
+              {/* UoM status for current data */}
+              {(() => {
+                const uomPairs = [...new Map(rows.filter(r => r.on_hand_uom || r.order_uom).map(r => {
+                  const k = `${r.on_hand_uom}|${r.order_uom}`;
+                  return [k, { onHand: r.on_hand_uom || "—", order: r.order_uom || "—", hasConversion: r.uomConv?.hasConversion, missing: r.uomConv?.conversionMissing }];
+                })).values()];
+                if (!uomPairs.length) return null;
+                return (
+                  <div style={{ background: C.surface, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
+                    <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 10px" }}>UoM STATUS — CURRENT DATA</p>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {uomPairs.map((p, i) => {
+                        const isSame = p.onHand === p.order || (!p.order || p.order === "—");
+                        const icon = p.hasConversion ? "✓" : p.missing ? "⚠" : "→";
+                        const color = p.hasConversion ? C.green : p.missing ? C.orange : C.muted;
+                        const desc = p.hasConversion ? `${p.onHand} → ${p.order} (mapped)` : p.missing ? `${p.onHand} → ${p.order} — no mapping found, will use 1:1` : isSame ? `${p.onHand} (same unit, 1:1)` : `${p.onHand} (no order UoM set, 1:1)`;
+                        return (
+                          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 8px", background: C.card, borderRadius: 6, border: `1px solid ${color}33` }}>
+                            <span style={{ color, fontWeight: 700, fontSize: 14, width: 16, textAlign: "center" }}>{icon}</span>
+                            <span style={{ color: C.text, fontSize: 12 }}>{desc}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Unit conversion definitions */}
               <div style={{ background: C.surface, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
                 <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 10px" }}>UNIT CONVERSIONS</p>
@@ -1498,6 +1704,54 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                 <p style={{ color: C.muted, fontSize: 12, margin: "0 0 10px" }}>
                   Match products by a prefix or suffix in their ID to apply a pack-size conversion. Example: suffix <strong style={{ color: C.accent }}>BB</strong> → 1 BB = 24 on-hand units.
                 </p>
+                {/* Auto-detect patterns */}
+                <div style={{ background: C.card, borderRadius: 8, padding: "10px 12px", marginBottom: 12, border: `1px solid ${C.border}` }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: psDetected !== null ? 10 : 0 }}>
+                    <span style={{ color: C.muted, fontSize: 11, fontWeight: 700, flex: 1 }}>AUTO-DETECT PATTERNS (1–3 letters)</span>
+                    <Btn small variant="ghost" onClick={() => {
+                      const ids = rows.map(r => String(r.product || "").trim()).filter(Boolean);
+                      setPsDetected(detectPrefixSuffixPatterns(ids, psIgnored));
+                    }}>Detect</Btn>
+                    {psDetected !== null && <Btn small variant="ghost" onClick={() => setPsDetected(null)}>Clear</Btn>}
+                  </div>
+                  {psDetected !== null && (psDetected.length === 0 ? (
+                    <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>No significant patterns found in product IDs.</p>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 260, overflowY: "auto" }}>
+                      {psDetected.map(p => {
+                        const typeColor = p.type === "prefix" ? C.accent : p.type === "suffix" ? C.purple : C.orange;
+                        const alreadyAdded = p.type !== "both" && prefixSuffixRules.some(r => r.matchType === p.type && r.text === p.text);
+                        return (
+                          <div key={p.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 8px", background: C.surface, borderRadius: 6 }}>
+                            <span style={{ color: typeColor, fontWeight: 700, fontSize: 10, minWidth: 46, letterSpacing: 0.5 }}>{p.type.toUpperCase()}</span>
+                            <span style={{ color: C.text, fontWeight: 700, fontSize: 13, fontFamily: "monospace", minWidth: 44 }}>{p.text}</span>
+                            <span style={{ color: C.muted, fontSize: 11, flex: 1 }}>{p.count} products · e.g. {p.examples.slice(0, 2).join(", ")}</span>
+                            {!alreadyAdded && (
+                              <Btn small variant="ghost" onClick={() => {
+                                const newRules = p.type === "both"
+                                  ? [
+                                      { id: Date.now(), matchType: "prefix", text: p.prefix, purchaseSize: 1, orderMode: "unit" },
+                                      { id: Date.now() + 1, matchType: "suffix", text: p.suffix, purchaseSize: 1, orderMode: "unit" },
+                                    ]
+                                  : [{ id: Date.now(), matchType: p.type, text: p.text, purchaseSize: 1, orderMode: "unit" }];
+                                const next = [...prefixSuffixRules, ...newRules.filter(nr => !prefixSuffixRules.some(r => r.matchType === nr.matchType && r.text === nr.text))];
+                                savePsRules(next); applyRulesToRows(productRules, uomMappings, categoryUomSettings, next);
+                                setPsDetected(prev => prev.filter(x => x.key !== p.key));
+                              }}>Use</Btn>
+                            )}
+                            {alreadyAdded && <span style={{ color: C.green, fontSize: 11 }}>✓ Added</span>}
+                            <Btn small variant="ghost" onClick={() => {
+                              const next = new Set(psIgnored); next.add(p.key);
+                              setPsIgnored(next);
+                              try { localStorage.setItem("ordergen_ps_ignored_v1", JSON.stringify([...next])); } catch {}
+                              setPsDetected(prev => prev.filter(x => x.key !== p.key));
+                            }}>Ignore</Btn>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
                 {/* Add rule form */}
                 <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr auto", gap: 8, alignItems: "end", marginBottom: 10 }}>
                   <div>
@@ -1774,6 +2028,76 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
           </div>
         );
       })()}
+
+      {/* pending orders panel */}
+      <input ref={pendingFileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }}
+        onChange={e => { if (e.target.files[0]) { handlePendingFile(pendingUploadIdx, e.target.files[0]); e.target.value = ""; } }} />
+      <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+        <button onClick={() => setPendingExpanded(x => !x)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit" }}>
+          <span style={{ color: C.text, fontWeight: 700, fontSize: 13 }}>
+            📦 Pending Orders
+            {pendingOrders.length > 0 && <span style={{ marginLeft: 8, color: C.green, fontSize: 12 }}>({pendingOrders.length} uploaded — affects {new Set(rows.filter(r => pendingOrders.some(po => (po._index?.get(`${String(r.location||"").trim()}|${String(r.product||"").trim()}`.toLowerCase()) ?? 0) > 0)).map(r => r._idx)).size} rows)</span>}
+          </span>
+          <span style={{ color: C.muted, fontSize: 12 }}>{pendingExpanded ? "▲" : "▼"}</span>
+        </button>
+        {pendingExpanded && (
+          <div style={{ padding: "0 16px 16px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 12, flexWrap: "wrap" }}>
+            {[0, 1, 2].map(slotIdx => {
+              const po = pendingOrders[slotIdx];
+              const matchCount = po ? [...(po._index?.values() ?? [])].filter(v => v > 0).length : 0;
+              return (
+                <div key={slotIdx} style={{ flex: "1 1 220px", minWidth: 200, background: C.card, borderRadius: 10, border: `1px solid ${po ? C.accent + "55" : C.border}`, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={{ color: C.muted, fontSize: 11, fontWeight: 700 }}>PENDING ORDER {slotIdx + 1}</span>
+                    {po && <button onClick={() => removePendingOrder(po.id)} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 14, padding: 0 }}>✕</button>}
+                  </div>
+                  {!po ? (
+                    <button onClick={() => { setPendingUploadIdx(slotIdx); pendingFileRef.current.click(); }}
+                      style={{ flex: 1, minHeight: 70, background: C.surface, border: `2px dashed ${C.border}`, borderRadius: 8, color: C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700 }}>
+                      + Upload File
+                    </button>
+                  ) : (
+                    <>
+                      <div style={{ color: C.text, fontSize: 12, fontWeight: 600, wordBreak: "break-all" }}>{po.filename}</div>
+                      <div style={{ color: C.green, fontSize: 11 }}>✓ {matchCount} product{matchCount !== 1 ? "s" : ""} matched</div>
+                      {/* Column mapping */}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        {[["product", "Product Col"], ["location", "Location Col"], ["qty", "Qty Col"]].map(([field, label]) => (
+                          <div key={field} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ color: C.muted, fontSize: 10, fontWeight: 700, minWidth: 68 }}>{label.toUpperCase()}</span>
+                            <select value={po.colMap[field] || ""} onChange={e => updatePendingOrderMeta(po.id, { colMap: { ...po.colMap, [field]: e.target.value } })}
+                              style={{ flex: 1, background: C.surface, border: `1px solid ${po.colMap[field] ? C.border : C.orange}`, borderRadius: 4, color: C.text, fontFamily: "inherit", fontSize: 11, padding: "2px 4px" }}>
+                              <option value="">— not set —</option>
+                              {po.headers.map(h => <option key={h} value={h}>{h}</option>)}
+                            </select>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Delivery mode */}
+                      <div style={{ display: "flex", gap: 4 }}>
+                        {[["days", "Lead Time Days"], ["date", "Delivery Date"]].map(([v, l]) => (
+                          <button key={v} onClick={() => updatePendingOrderMeta(po.id, { deliveryMode: v })}
+                            style={{ flex: 1, padding: "4px 6px", borderRadius: 5, fontFamily: "inherit", fontWeight: 700, fontSize: 10, cursor: "pointer", border: `1px solid ${po.deliveryMode === v ? C.accent : C.border}`, background: po.deliveryMode === v ? C.accentDim : "transparent", color: po.deliveryMode === v ? C.accent : C.muted }}>{l}</button>
+                        ))}
+                      </div>
+                      {po.deliveryMode === "date" ? (
+                        <input type="date" value={po.deliveryDate || ""} onChange={e => updatePendingOrderMeta(po.id, { deliveryDate: e.target.value, leadtimeDays: "" })}
+                          style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, color: C.text, fontFamily: "inherit", fontSize: 12, padding: "3px 6px", width: "100%", boxSizing: "border-box" }} />
+                      ) : (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <input type="number" min={0} value={po.leadtimeDays || ""} onChange={e => updatePendingOrderMeta(po.id, { leadtimeDays: e.target.value, deliveryDate: "" })} placeholder="Days until delivery"
+                            style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, color: C.text, fontFamily: "inherit", fontSize: 12, padding: "3px 6px" }} />
+                          <span style={{ color: C.muted, fontSize: 11 }}>days</span>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* excluded total rows callout */}
       {(() => {
