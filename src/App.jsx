@@ -12,12 +12,12 @@ const fmtCurrency = (n) =>
     ? "—"
     : "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-function calcOrder(row, targetDays) {
+function calcOrder(row, targetDays, onHandToOrderFactor = 1) {
   const usage = parseFloat(row.daily_usage);
   const onHand = parseFloat(row.on_hand);
   const lead = parseFloat(row.leadtime);
   if (isNaN(usage) || isNaN(onHand) || isNaN(lead)) return null;
-  return Math.ceil(Math.max(0, usage * (lead + targetDays) - onHand));
+  return Math.ceil(Math.max(0, (usage * (lead + targetDays) - onHand) * onHandToOrderFactor));
 }
 
 function calcDaysOnHand(row) {
@@ -74,6 +74,21 @@ function saveProductRules(rules) {
   try { localStorage.setItem(LS_RULES_KEY, JSON.stringify(rules)); } catch {}
 }
 
+const LS_UOM_KEY = "ordergen_uom_v1";
+const LS_CATEGORY_UOM_KEY = "ordergen_category_uom_v1";
+function loadUomMappings() {
+  try { return JSON.parse(localStorage.getItem(LS_UOM_KEY) || "[]"); } catch { return []; }
+}
+function saveUomMappings(m) {
+  try { localStorage.setItem(LS_UOM_KEY, JSON.stringify(m)); } catch {}
+}
+function loadCategoryUom() {
+  try { return JSON.parse(localStorage.getItem(LS_CATEGORY_UOM_KEY) || "{}"); } catch { return {}; }
+}
+function saveCategoryUom(s) {
+  try { localStorage.setItem(LS_CATEGORY_UOM_KEY, JSON.stringify(s)); } catch {}
+}
+
 // Apply product-specific rules to a suggested order quantity
 // onHand is needed to evaluate maxOnHandAfter constraint
 function applyProductRule(rule, suggestedQty, onHand) {
@@ -96,6 +111,21 @@ function applyProductRule(rule, suggestedQty, onHand) {
     }
   }
   return Math.max(0, qty);
+}
+
+function getUomConversion(row, productRules, categoryUomSettings, uomMappings) {
+  const productId = String(row.product ?? "").trim();
+  const rule = (productRules || []).find(r => String(r.productId).trim() === productId);
+  const onHandUom = (rule?.onHandUom || "").trim() || (row.category && categoryUomSettings?.[row.category]?.onHandUom) || "";
+  const orderUom = (rule?.orderUom || "").trim() || (row.category && categoryUomSettings?.[row.category]?.orderUom) || "";
+  if (!onHandUom || !orderUom || onHandUom === orderUom) {
+    return { onHandUom, orderUom, onHandToOrderFactor: 1, orderToOnHandFactor: 1, hasConversion: false };
+  }
+  const m = (uomMappings || []).find(u => u.fromUnit === onHandUom && u.toUnit === orderUom);
+  if (m && m.factor > 0) return { onHandUom, orderUom, onHandToOrderFactor: m.factor, orderToOnHandFactor: 1 / m.factor, hasConversion: true };
+  const rev = (uomMappings || []).find(u => u.fromUnit === orderUom && u.toUnit === onHandUom);
+  if (rev && rev.factor > 0) return { onHandUom, orderUom, onHandToOrderFactor: 1 / rev.factor, orderToOnHandFactor: rev.factor, hasConversion: true };
+  return { onHandUom, orderUom, onHandToOrderFactor: 1, orderToOnHandFactor: 1, hasConversion: false, conversionMissing: true };
 }
 
 // Score a saved mapping against current headers: count matching column values
@@ -750,13 +780,24 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const [newRuleMin, setNewRuleMin] = useState("");
   const [newRuleMax, setNewRuleMax] = useState("");
   const [newRuleMaxOnHand, setNewRuleMaxOnHand] = useState("");
-  const [rulesTab, setRulesTab] = useState("manual"); // "manual" | "upload"
+  const [newRuleOnHandUom, setNewRuleOnHandUom] = useState("");
+  const [newRuleOrderUom, setNewRuleOrderUom] = useState("");
+  const [rulesTab, setRulesTab] = useState("manual"); // "manual" | "upload" | "uom"
   const [rulesUploadPreview, setRulesUploadPreview] = useState(null); // parsed rows from file
   const [rulesDragging, setRulesDragging] = useState(false);
   const [rulesUploadError, setRulesUploadError] = useState("");
   const rulesFileRef = useRef();
 
-  const buildRows = (productRules) =>
+  const [uomMappings, setUomMappings] = useState(() => loadUomMappings());
+  const [categoryUomSettings, setCategoryUomSettings] = useState(() => loadCategoryUom());
+  const [newUomFrom, setNewUomFrom] = useState("");
+  const [newUomTo, setNewUomTo] = useState("");
+  const [newUomFactor, setNewUomFactor] = useState("");
+  const [newCatKey, setNewCatKey] = useState("");
+  const [newCatOnHandUom, setNewCatOnHandUom] = useState("");
+  const [newCatOrderUom, setNewCatOrderUom] = useState("");
+
+  const buildRows = (productRules, uomMaps = uomMappings, catUom = categoryUomSettings) =>
     rawRows.map((r, i) => {
       const get = (field) => {
         if (manualEntry?.fieldMode?.[field] === "manual") return trimVal(manualEntry.manualValues?.[field] ?? "");
@@ -778,18 +819,19 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
         category: hasCategory ? get("category") : "",
         cost: hasCost ? get("cost") : "",
       };
-      const suggested = calcOrder(row, targetDays);
-      const days_on_hand = calcDaysOnHand(row);
-      // Apply product-specific rule if one exists
       const productId = String(row.product ?? "").trim();
       const rule = (productRules || []).find(ru => String(ru.productId).trim() === productId);
+      const uomConv = getUomConversion(row, productRules, catUom, uomMaps);
+      const suggested = calcOrder(row, targetDays, uomConv.onHandToOrderFactor);
+      const days_on_hand = calcDaysOnHand(row);
       const onHandNum = parseFloat(row.on_hand);
       const finalOrder = rule ? applyProductRule(rule, suggested ?? 0, isNaN(onHandNum) ? null : onHandNum) : (suggested ?? 0);
-      const est_on_hand_after = !isNaN(onHandNum) ? onHandNum + finalOrder : null;
-      return { ...row, suggested, order: finalOrder, days_on_hand, est_on_hand_after, appliedRule: rule || null };
+      const safeOrder = Math.max(0, finalOrder);
+      const est_on_hand_after = !isNaN(onHandNum) ? onHandNum + safeOrder * uomConv.orderToOnHandFactor : null;
+      return { ...row, suggested, order: safeOrder, days_on_hand, est_on_hand_after, appliedRule: rule || null, uomConv };
     });
 
-  const [rows, setRows] = useState(() => buildRows(productRules));
+  const [rows, setRows] = useState(() => buildRows(productRules, uomMappings, categoryUomSettings));
   const [targetLocal, setTargetLocal] = useState(targetDays);
   // colTextFilters: { [colKey]: string }  — type-in text filter
   // colCheckedFilters: { [colKey]: Set<string> }  — empty Set = show all; non-empty = show only checked
@@ -799,37 +841,54 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const [sortDir, setSortDir] = useState(1);
   const [hideZero, setHideZero] = useState(false);
 
-  const recalc = (td, rulesOverride) => {
+  const recalc = (td, rulesOverride, uomOverride, catUomOverride) => {
     const rules = rulesOverride ?? productRules;
+    const uomMaps = uomOverride ?? uomMappings;
+    const catUom = catUomOverride ?? categoryUomSettings;
     setRows(prev => prev.map(r => {
-      const s = calcOrder(r, td);
+      const uomConv = getUomConversion(r, rules, catUom, uomMaps);
+      const s = calcOrder(r, td, uomConv.onHandToOrderFactor);
       const rule = rules.find(ru => String(ru.productId).trim() === String(r.product ?? "").trim());
       const onHandNum = parseFloat(r.on_hand);
       const finalOrder = rule ? applyProductRule(rule, s ?? 0, isNaN(onHandNum) ? null : onHandNum) : (s ?? 0);
-      const est_on_hand_after = !isNaN(onHandNum) ? onHandNum + finalOrder : null;
-      return { ...r, suggested: s, order: finalOrder, appliedRule: rule || null, est_on_hand_after };
+      const safeOrder = Math.max(0, finalOrder);
+      const est_on_hand_after = !isNaN(onHandNum) ? onHandNum + safeOrder * uomConv.orderToOnHandFactor : null;
+      return { ...r, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, uomConv };
     }));
     setTargetLocal(td);
   };
 
-  const applyRulesToRows = (rules) => {
+  const applyRulesToRows = (rules, uomOverride, catUomOverride) => {
+    const uomMaps = uomOverride ?? uomMappings;
+    const catUom = catUomOverride ?? categoryUomSettings;
     setRows(prev => prev.map(r => {
+      const uomConv = getUomConversion(r, rules, catUom, uomMaps);
+      const s = calcOrder(r, targetLocal, uomConv.onHandToOrderFactor);
       const rule = rules.find(ru => String(ru.productId).trim() === String(r.product ?? "").trim());
       const onHandNum = parseFloat(r.on_hand);
-      const finalOrder = rule ? applyProductRule(rule, r.suggested ?? 0, isNaN(onHandNum) ? null : onHandNum) : (r.suggested ?? 0);
-      const est_on_hand_after = !isNaN(onHandNum) ? onHandNum + finalOrder : null;
-      return { ...r, order: finalOrder, appliedRule: rule || null, est_on_hand_after };
+      const finalOrder = rule ? applyProductRule(rule, s ?? 0, isNaN(onHandNum) ? null : onHandNum) : (s ?? 0);
+      const safeOrder = Math.max(0, finalOrder);
+      const est_on_hand_after = !isNaN(onHandNum) ? onHandNum + safeOrder * uomConv.orderToOnHandFactor : null;
+      return { ...r, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, uomConv };
     }));
   };
   const setOrder = (idx, val) => setRows(prev => prev.map(r => {
     if (r._idx !== idx) return r;
-    const newOrder = val === "" ? "" : Number(val);
+    const newOrder = val === "" ? "" : Math.max(0, Number(val));
     const onHandNum = parseFloat(r.on_hand);
-    const est_on_hand_after = !isNaN(onHandNum) && newOrder !== "" ? onHandNum + Number(newOrder) : null;
+    const factor = r.uomConv?.orderToOnHandFactor ?? 1;
+    const est_on_hand_after = !isNaN(onHandNum) && newOrder !== "" ? onHandNum + Number(newOrder) * factor : null;
     return { ...r, order: newOrder, est_on_hand_after };
   }));
-  const resetOne = (idx) => setRows(prev => prev.map(r => r._idx === idx ? { ...r, order: r.suggested ?? 0 } : r));
-  const resetAll = () => setRows(prev => prev.map(r => ({ ...r, order: r.suggested ?? 0 })));
+  const resetOne = (idx) => setRows(prev => prev.map(r => {
+    if (r._idx !== idx) return r;
+    const o = Math.max(0, r.suggested ?? 0);
+    const onHandNum = parseFloat(r.on_hand);
+    const factor = r.uomConv?.orderToOnHandFactor ?? 1;
+    const est_on_hand_after = !isNaN(onHandNum) ? onHandNum + o * factor : null;
+    return { ...r, order: o, est_on_hand_after };
+  }));
+  const resetAll = () => recalc(targetLocal);
   const sort = (key) => { if (sortKey === key) setSortDir(d => -d); else { setSortKey(key); setSortDir(1); } };
   const setTextFilter = (key, val) => setColTextFilters(f => ({ ...f, [key]: val }));
   const setCheckedFilter = (key, set) => setColCheckedFilters(f => ({ ...f, [key]: set }));
@@ -926,11 +985,14 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       minQty: newRuleMin !== "" ? Number(newRuleMin) : null,
       maxQty: newRuleMax !== "" ? Number(newRuleMax) : null,
       maxOnHandAfter: newRuleMaxOnHand !== "" ? Number(newRuleMaxOnHand) : null,
+      onHandUom: newRuleOnHandUom.trim() || null,
+      orderUom: newRuleOrderUom.trim() || null,
     };
     const next = [...productRules.filter(r => r.productId !== rule.productId), rule];
     saveRules(next);
     applyRulesToRows(next);
     setNewRuleId(""); setNewRuleCaseSize(""); setNewRuleMin(""); setNewRuleMax(""); setNewRuleMaxOnHand("");
+    setNewRuleOnHandUom(""); setNewRuleOrderUom("");
   };
 
   const removeRule = (productId) => {
@@ -1049,7 +1111,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
 
           {/* tab switcher */}
           <div style={{ display: "flex", gap: 0, marginBottom: 14, background: C.surface, borderRadius: 8, padding: 3, width: "fit-content" }}>
-            {[["manual", "✏ Manual Entry"], ["upload", "📂 Upload File"]].map(([tab, label]) => (
+            {[["manual", "✏ Manual Entry"], ["upload", "📂 Upload File"], ["uom", "⚖ UoM Mapping"]].map(([tab, label]) => (
               <button key={tab} onClick={() => { setRulesTab(tab); setRulesUploadPreview(null); setRulesUploadError(""); }}
                 style={{ padding: "6px 16px", borderRadius: 6, fontFamily: "inherit", fontWeight: 700, fontSize: 12, cursor: "pointer", border: "none",
                   background: rulesTab === tab ? C.purple : "transparent",
@@ -1063,7 +1125,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
           {rulesTab === "manual" && (
             <div style={{ background: C.surface, borderRadius: 10, padding: "14px 16px", marginBottom: 14, border: `1px solid ${C.border}` }}>
               <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 10px" }}>ADD / UPDATE RULE</p>
-              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr auto", gap: 8, alignItems: "end" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 1fr 1fr auto", gap: 8, alignItems: "end" }}>
                 <div>
                   <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>PRODUCT ID</label>
                   <Input value={newRuleId} onChange={e => setNewRuleId(e.target.value)}
@@ -1086,10 +1148,18 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                   <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>MAX ON HAND AFTER</label>
                   <Input type="number" value={newRuleMaxOnHand} onChange={e => setNewRuleMaxOnHand(e.target.value)} placeholder="e.g. 200" style={{ width: "100%" }} />
                 </div>
+                <div>
+                  <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>ON HAND UOM</label>
+                  <Input value={newRuleOnHandUom} onChange={e => setNewRuleOnHandUom(e.target.value)} placeholder="e.g. qt" style={{ width: "100%" }} />
+                </div>
+                <div>
+                  <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>ORDER UOM</label>
+                  <Input value={newRuleOrderUom} onChange={e => setNewRuleOrderUom(e.target.value)} placeholder="e.g. gal" style={{ width: "100%" }} />
+                </div>
                 <Btn small onClick={addRule} disabled={!newRuleId.trim()}>Add</Btn>
               </div>
               <p style={{ color: C.muted, fontSize: 11, margin: "8px 0 0" }}>
-                Case size rounds up to the next multiple (e.g. 14 → 24 with case 12). Min/max clamp after rounding. Press Enter after Product ID to save quickly.
+                Case size rounds up to the next multiple. Min/max clamp after rounding. On Hand / Order UoM overrides the category default. Press Enter to save quickly.
               </p>
             </div>
           )}
@@ -1180,6 +1250,128 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
             </div>
           )}
 
+          {/* ── UOM MAPPING TAB ── */}
+          {rulesTab === "uom" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 16, marginBottom: 14 }}>
+              {/* Unit conversion definitions */}
+              <div style={{ background: C.surface, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
+                <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 10px" }}>UNIT CONVERSIONS</p>
+                <div style={{ background: C.purple + "11", border: `1px solid ${C.purple}33`, borderRadius: 8, padding: "8px 12px", color: C.purple, fontSize: 12, marginBottom: 12 }}>
+                  Define how on-hand units convert to order units. Example: 1 qt = 0.25 gal (ordering in gallons when stock is tracked in quarts).
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr auto auto", gap: 8, alignItems: "end", marginBottom: 10 }}>
+                  <div>
+                    <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>FROM (ON HAND)</label>
+                    <Input value={newUomFrom} onChange={e => setNewUomFrom(e.target.value)} placeholder="e.g. qt" style={{ width: "100%" }} />
+                  </div>
+                  <span style={{ color: C.muted, fontSize: 13, paddingBottom: 8 }}>→</span>
+                  <div>
+                    <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>TO (ORDER)</label>
+                    <Input value={newUomTo} onChange={e => setNewUomTo(e.target.value)} placeholder="e.g. gal" style={{ width: "100%" }} />
+                  </div>
+                  <div>
+                    <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>FACTOR (1 FROM = ? TO)</label>
+                    <Input type="number" value={newUomFactor} onChange={e => setNewUomFactor(e.target.value)} placeholder="e.g. 0.25" style={{ width: 110 }} />
+                  </div>
+                  <Btn small onClick={() => {
+                    if (!newUomFrom.trim() || !newUomTo.trim() || newUomFactor === "") return;
+                    const next = [...uomMappings.filter(u => !(u.fromUnit === newUomFrom.trim() && u.toUnit === newUomTo.trim())),
+                      { fromUnit: newUomFrom.trim(), toUnit: newUomTo.trim(), factor: Number(newUomFactor) }];
+                    setUomMappings(next); saveUomMappings(next);
+                    applyRulesToRows(productRules, next, categoryUomSettings);
+                    setNewUomFrom(""); setNewUomTo(""); setNewUomFactor("");
+                  }} disabled={!newUomFrom.trim() || !newUomTo.trim() || newUomFactor === ""}>Add</Btn>
+                </div>
+                {uomMappings.length === 0 ? (
+                  <p style={{ color: C.muted, fontSize: 12, textAlign: "center", padding: "8px 0" }}>No conversions defined yet.</p>
+                ) : (
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead><tr style={{ background: C.card }}>
+                      {["On Hand Unit", "→", "Order Unit", "Factor", "Reverse", ""].map((h, i) => (
+                        <th key={i} style={{ padding: "6px 10px", textAlign: i > 2 ? "right" : "left", color: C.muted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {uomMappings.map((u, i) => (
+                        <tr key={i} style={{ borderBottom: `1px solid ${C.border}33` }}>
+                          <td style={{ padding: "6px 10px", color: C.text, fontWeight: 600 }}>{u.fromUnit}</td>
+                          <td style={{ padding: "6px 10px", color: C.muted }}>→</td>
+                          <td style={{ padding: "6px 10px", color: C.text, fontWeight: 600 }}>{u.toUnit}</td>
+                          <td style={{ padding: "6px 10px", color: C.purple, fontWeight: 700, textAlign: "right" }}>{u.factor}</td>
+                          <td style={{ padding: "6px 10px", color: C.muted, textAlign: "right" }}>{u.factor > 0 ? `${(1/u.factor).toFixed(4).replace(/\.?0+$/, "")} ${u.fromUnit}/${u.toUnit}` : "—"}</td>
+                          <td style={{ padding: "6px 10px", textAlign: "right" }}>
+                            <Btn small variant="danger" onClick={() => {
+                              const next = uomMappings.filter((_, j) => j !== i);
+                              setUomMappings(next); saveUomMappings(next);
+                              applyRulesToRows(productRules, next, categoryUomSettings);
+                            }}>✕</Btn>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {/* Category-level UoM defaults */}
+              {hasCategory && (
+                <div style={{ background: C.surface, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
+                  <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 10px" }}>CATEGORY DEFAULTS</p>
+                  <p style={{ color: C.muted, fontSize: 12, margin: "0 0 10px" }}>Set UoM for an entire category. Per-product rules override these.</p>
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr auto", gap: 8, alignItems: "end", marginBottom: 10 }}>
+                    <div>
+                      <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>CATEGORY</label>
+                      <Input value={newCatKey} onChange={e => setNewCatKey(e.target.value)} placeholder="e.g. Paint" style={{ width: "100%" }} />
+                    </div>
+                    <div>
+                      <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>ON HAND UOM</label>
+                      <Input value={newCatOnHandUom} onChange={e => setNewCatOnHandUom(e.target.value)} placeholder="e.g. qt" style={{ width: "100%" }} />
+                    </div>
+                    <div>
+                      <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>ORDER UOM</label>
+                      <Input value={newCatOrderUom} onChange={e => setNewCatOrderUom(e.target.value)} placeholder="e.g. gal" style={{ width: "100%" }} />
+                    </div>
+                    <Btn small onClick={() => {
+                      if (!newCatKey.trim() || !newCatOnHandUom.trim() || !newCatOrderUom.trim()) return;
+                      const next = { ...categoryUomSettings, [newCatKey.trim()]: { onHandUom: newCatOnHandUom.trim(), orderUom: newCatOrderUom.trim() } };
+                      setCategoryUomSettings(next); saveCategoryUom(next);
+                      applyRulesToRows(productRules, uomMappings, next);
+                      setNewCatKey(""); setNewCatOnHandUom(""); setNewCatOrderUom("");
+                    }} disabled={!newCatKey.trim() || !newCatOnHandUom.trim() || !newCatOrderUom.trim()}>Save</Btn>
+                  </div>
+                  {Object.keys(categoryUomSettings).length === 0 ? (
+                    <p style={{ color: C.muted, fontSize: 12, textAlign: "center", padding: "4px 0" }}>No category defaults set.</p>
+                  ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead><tr style={{ background: C.card }}>
+                        {["Category", "On Hand UoM", "Order UoM", ""].map((h, i) => (
+                          <th key={i} style={{ padding: "6px 10px", textAlign: i === 3 ? "right" : "left", color: C.muted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>
+                        {Object.entries(categoryUomSettings).map(([cat, uom]) => (
+                          <tr key={cat} style={{ borderBottom: `1px solid ${C.border}33` }}>
+                            <td style={{ padding: "6px 10px", color: C.text, fontWeight: 600 }}>{cat}</td>
+                            <td style={{ padding: "6px 10px", color: C.purple }}>{uom.onHandUom}</td>
+                            <td style={{ padding: "6px 10px", color: C.accent }}>{uom.orderUom}</td>
+                            <td style={{ padding: "6px 10px", textAlign: "right" }}>
+                              <Btn small variant="danger" onClick={() => {
+                                const next = { ...categoryUomSettings };
+                                delete next[cat];
+                                setCategoryUomSettings(next); saveCategoryUom(next);
+                                applyRulesToRows(productRules, uomMappings, next);
+                              }}>✕</Btn>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* existing rules table — always visible below both tabs */}
           <div style={{ marginTop: 6 }}>
             <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 8px" }}>
@@ -1196,7 +1388,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                 <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "inherit", fontSize: 13 }}>
                   <thead style={{ position: "sticky", top: 0 }}>
                     <tr style={{ background: C.surface }}>
-                      {["Product ID", "Case Size", "Min Qty", "Max Qty", "Max On Hand After", ""].map((h, i) => (
+                      {["Product ID", "Case Size", "Min Qty", "Max Qty", "Max On Hand After", "On Hand UoM", "Order UoM", ""].map((h, i) => (
                         <th key={i} style={{ padding: "8px 12px", textAlign: i > 0 ? "right" : "left", color: C.muted, fontSize: 11, fontWeight: 700, borderBottom: `1px solid ${C.border}`, background: C.surface }}>{h}</th>
                       ))}
                     </tr>
@@ -1214,6 +1406,8 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                           <td style={{ padding: "8px 12px", color: C.muted, textAlign: "right" }}>{rule.minQty ?? "—"}</td>
                           <td style={{ padding: "8px 12px", color: C.muted, textAlign: "right" }}>{rule.maxQty ?? "—"}</td>
                           <td style={{ padding: "8px 12px", color: rule.maxOnHandAfter != null ? C.purple : C.muted, textAlign: "right", fontWeight: rule.maxOnHandAfter != null ? 700 : 400 }}>{rule.maxOnHandAfter ?? "—"}</td>
+                          <td style={{ padding: "8px 12px", color: rule.onHandUom ? C.purple : C.muted, textAlign: "right" }}>{rule.onHandUom ?? "—"}</td>
+                          <td style={{ padding: "8px 12px", color: rule.orderUom ? C.accent : C.muted, textAlign: "right" }}>{rule.orderUom ?? "—"}</td>
                           <td style={{ padding: "8px 12px", textAlign: "right" }}>
                             <Btn small variant="danger" onClick={() => removeRule(rule.productId)}>Remove</Btn>
                           </td>
@@ -1411,7 +1605,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                   </td>
                   <td style={{ padding: "9px 12px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                      <Input type="number" value={r.order} onChange={(e) => setOrder(r._idx, e.target.value)}
+                      <Input type="number" min={0} value={r.order} onChange={(e) => setOrder(r._idx, e.target.value)}
                         style={{ width: 80, textAlign: "right", borderColor: limitFlag || (edited ? C.orange : C.border) }} />
                       {limitFlag && <span style={{ color: limitFlag, fontSize: 16, lineHeight: 1 }} title={overMax ? `Over max (${fmtNum(orderLimits.orderMax, 0)} units)` : `Under min (${fmtNum(orderLimits.orderMin, 0)} units)`}>⚠</span>}
                     </div>
@@ -1465,7 +1659,7 @@ function ExportStep({ rows, onBack }) {
 
   // Editable local rows — must be declared before any derived values that use it
   const [localRows, setLocalRows] = useState(() => rows.map(r => ({ ...r })));
-  const updateLocalOrder = (idx, val) => setLocalRows(prev => prev.map(r => r._idx === idx ? { ...r, order: val === "" ? "" : Number(val) } : r));
+  const updateLocalOrder = (idx, val) => setLocalRows(prev => prev.map(r => r._idx === idx ? { ...r, order: val === "" ? "" : Math.max(0, Number(val)) } : r));
   const updateAllInGroup = (idxList, val) => setLocalRows(prev => prev.map(r => idxList.includes(r._idx) ? { ...r, order: Number(val) } : r));
 
   const setColFilter = (id, val) => setColFilters(f => ({ ...f, [id]: val }));
@@ -1659,6 +1853,7 @@ function ExportStep({ rows, onBack }) {
                         <span style={{ color: C.text, fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{r.product}</span>
                         <input
                           type="number"
+                          min={0}
                           value={r.order}
                           onChange={e => updateLocalOrder(r._idx, e.target.value)}
                           style={{ width: 60, background: C.card, border: `1px solid ${C.border}`, borderRadius: 4, color: accentColor, fontFamily: "inherit", fontSize: 11, fontWeight: 700, padding: "2px 6px", outline: "none", textAlign: "right" }}
@@ -1878,14 +2073,33 @@ export default function App() {
     setStep(1);
   };
 
+  const handleNewOrder = () => {
+    setStep(0);
+    setFileData(null);
+    setMapping(null);
+    setUsageConfig(null);
+    setManualEntry(null);
+    setOrderLimits(null);
+    setFinalRows(null);
+    setSavedMapState(null);
+    setSuggestion(null);
+  };
+
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'DM Sans', 'Segoe UI', system-ui, sans-serif", color: C.text, paddingBottom: 60 }}>
       <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "18px 32px", display: "flex", alignItems: "center", gap: 14, marginBottom: 40 }}>
         <div style={{ width: 36, height: 36, borderRadius: 10, background: `linear-gradient(135deg, ${C.accent}, #7b5bf7)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>📦</div>
-        <div>
+        <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 800, fontSize: 17, letterSpacing: -0.3 }}>OrderGen</div>
           <div style={{ color: C.muted, fontSize: 12 }}>Inventory-driven order planning</div>
         </div>
+        {step > 0 && (
+          <button onClick={handleNewOrder} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, color: C.muted, fontFamily: "inherit", fontWeight: 700, fontSize: 13, cursor: "pointer", padding: "8px 16px", transition: "all .15s" }}
+            onMouseEnter={e => { e.target.style.borderColor = C.accent; e.target.style.color = C.accent; }}
+            onMouseLeave={e => { e.target.style.borderColor = C.border; e.target.style.color = C.muted; }}>
+            ↩ Start New Order
+          </button>
+        )}
       </div>
       <div style={{ maxWidth: 1040, margin: "0 auto", padding: "0 24px" }}>
         <StepBar current={step} />
