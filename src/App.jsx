@@ -89,6 +89,14 @@ function saveCategoryUom(s) {
   try { localStorage.setItem(LS_CATEGORY_UOM_KEY, JSON.stringify(s)); } catch {}
 }
 
+const LS_PS_KEY = "ordergen_prefix_suffix_v1";
+function loadPrefixSuffixRules() {
+  try { return JSON.parse(localStorage.getItem(LS_PS_KEY) || "[]"); } catch { return []; }
+}
+function savePrefixSuffixRules(r) {
+  try { localStorage.setItem(LS_PS_KEY, JSON.stringify(r)); } catch {}
+}
+
 // Apply product-specific rules to a suggested order quantity
 // onHand is needed to evaluate maxOnHandAfter constraint
 function applyProductRule(rule, suggestedQty, onHand) {
@@ -113,19 +121,41 @@ function applyProductRule(rule, suggestedQty, onHand) {
   return Math.max(0, qty);
 }
 
-function getUomConversion(row, productRules, categoryUomSettings, uomMappings) {
+function getUomConversion(row, productRules, categoryUomSettings, uomMappings, prefixSuffixRules = []) {
   const productId = String(row.product ?? "").trim();
   const rule = (productRules || []).find(r => String(r.productId).trim() === productId);
   const onHandUom = (rule?.onHandUom || "").trim() || (row.uom && String(row.uom).trim()) || (row.category && categoryUomSettings?.[row.category]?.onHandUom) || "";
   const orderUom = (rule?.orderUom || "").trim() || (row.category && categoryUomSettings?.[row.category]?.orderUom) || "";
-  if (!onHandUom || !orderUom || onHandUom === orderUom) {
-    return { onHandUom, orderUom, onHandToOrderFactor: 1, orderToOnHandFactor: 1, hasConversion: false };
+
+  // Named UoM conversion path (product rule / column / category)
+  if (onHandUom && orderUom && onHandUom !== orderUom) {
+    const m = (uomMappings || []).find(u => u.fromUnit === onHandUom && u.toUnit === orderUom);
+    if (m && m.factor > 0) return { onHandUom, orderUom, onHandToOrderFactor: m.factor, orderToOnHandFactor: 1 / m.factor, hasConversion: true };
+    const rev = (uomMappings || []).find(u => u.fromUnit === orderUom && u.toUnit === onHandUom);
+    if (rev && rev.factor > 0) return { onHandUom, orderUom, onHandToOrderFactor: 1 / rev.factor, orderToOnHandFactor: rev.factor, hasConversion: true };
+    return { onHandUom, orderUom, onHandToOrderFactor: 1, orderToOnHandFactor: 1, hasConversion: false, conversionMissing: true };
   }
-  const m = (uomMappings || []).find(u => u.fromUnit === onHandUom && u.toUnit === orderUom);
-  if (m && m.factor > 0) return { onHandUom, orderUom, onHandToOrderFactor: m.factor, orderToOnHandFactor: 1 / m.factor, hasConversion: true };
-  const rev = (uomMappings || []).find(u => u.fromUnit === orderUom && u.toUnit === onHandUom);
-  if (rev && rev.factor > 0) return { onHandUom, orderUom, onHandToOrderFactor: 1 / rev.factor, orderToOnHandFactor: rev.factor, hasConversion: true };
-  return { onHandUom, orderUom, onHandToOrderFactor: 1, orderToOnHandFactor: 1, hasConversion: false, conversionMissing: true };
+
+  // Prefix/suffix pack-size path (fallback when no named UoM applies)
+  if (!rule?.onHandUom && !rule?.orderUom) {
+    const ps = (prefixSuffixRules || []).find(r => {
+      const t = (r.text || "").trim();
+      if (!t || !r.purchaseSize) return false;
+      return r.matchType === "prefix" ? productId.startsWith(t) : productId.endsWith(t);
+    });
+    if (ps) {
+      const packSize = Number(ps.purchaseSize);
+      if (ps.orderMode === "pack") {
+        // Order in packs: 1 pack = packSize on-hand units
+        return { onHandUom: "unit", orderUom: ps.text, onHandToOrderFactor: 1 / packSize, orderToOnHandFactor: packSize, hasConversion: true, isPack: true, packSize };
+      } else {
+        // Order in individual on-hand units but round to pack multiples
+        return { onHandUom: "unit", orderUom: "unit", onHandToOrderFactor: 1, orderToOnHandFactor: 1, hasConversion: false, isPack: true, packSize };
+      }
+    }
+  }
+
+  return { onHandUom, orderUom, onHandToOrderFactor: 1, orderToOnHandFactor: 1, hasConversion: false };
 }
 
 // Score a saved mapping against current headers: count matching column values
@@ -798,6 +828,12 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
 
   const [uomMappings, setUomMappings] = useState(() => loadUomMappings());
   const [categoryUomSettings, setCategoryUomSettings] = useState(() => loadCategoryUom());
+  const [prefixSuffixRules, setPrefixSuffixRules] = useState(() => loadPrefixSuffixRules());
+  const savePsRules = (r) => { setPrefixSuffixRules(r); savePrefixSuffixRules(r); };
+  const [newPsMatchType, setNewPsMatchType] = useState("suffix");
+  const [newPsText, setNewPsText] = useState("");
+  const [newPsPackSize, setNewPsPackSize] = useState("");
+  const [newPsOrderMode, setNewPsOrderMode] = useState("pack");
   const [newUomFrom, setNewUomFrom] = useState("");
   const [newUomTo, setNewUomTo] = useState("");
   const [newUomFactor, setNewUomFactor] = useState("");
@@ -805,7 +841,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const [newCatOnHandUom, setNewCatOnHandUom] = useState("");
   const [newCatOrderUom, setNewCatOrderUom] = useState("");
 
-  const buildRows = (productRules, uomMaps = uomMappings, catUom = categoryUomSettings) =>
+  const buildRows = (productRules, uomMaps = uomMappings, catUom = categoryUomSettings, psRules = prefixSuffixRules) =>
     rawRows.map((r, i) => {
       const get = (field) => {
         if (manualEntry?.fieldMode?.[field] === "manual") return trimVal(manualEntry.manualValues?.[field] ?? "");
@@ -830,17 +866,21 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       };
       const productId = String(row.product ?? "").trim();
       const rule = (productRules || []).find(ru => String(ru.productId).trim() === productId);
-      const uomConv = getUomConversion(row, productRules, catUom, uomMaps);
+      const uomConv = getUomConversion(row, productRules, catUom, uomMaps, psRules);
       const suggested = calcOrder(row, targetDays, uomConv.onHandToOrderFactor);
       const days_on_hand = calcDaysOnHand(row);
       const onHandNum = parseFloat(row.on_hand);
-      const finalOrder = rule ? applyProductRule(rule, suggested ?? 0, isNaN(onHandNum) ? null : onHandNum) : (suggested ?? 0);
+      let finalOrder = rule ? applyProductRule(rule, suggested ?? 0, isNaN(onHandNum) ? null : onHandNum) : (suggested ?? 0);
+      // Apply pack-size rounding when prefix/suffix "unit" mode is active and no product rule case size overrides
+      if (uomConv.isPack && uomConv.packSize > 1 && !uomConv.hasConversion && (!rule || rule.caseSize == null) && finalOrder > 0) {
+        finalOrder = Math.ceil(finalOrder / uomConv.packSize) * uomConv.packSize;
+      }
       const safeOrder = Math.max(0, finalOrder);
       const est_on_hand_after = !isNaN(onHandNum) ? onHandNum + safeOrder * uomConv.orderToOnHandFactor : null;
       return { ...row, suggested, order: safeOrder, days_on_hand, est_on_hand_after, appliedRule: rule || null, uomConv };
     });
 
-  const [rows, setRows] = useState(() => buildRows(productRules, uomMappings, categoryUomSettings));
+  const [rows, setRows] = useState(() => buildRows(productRules, uomMappings, categoryUomSettings, prefixSuffixRules));
   const [targetLocal, setTargetLocal] = useState(targetDays);
   // colTextFilters: { [colKey]: string }  — type-in text filter
   // colCheckedFilters: { [colKey]: Set<string> }  — empty Set = show all; non-empty = show only checked
@@ -850,16 +890,25 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const [sortDir, setSortDir] = useState(1);
   const [hideZero, setHideZero] = useState(false);
 
-  const recalc = (td, rulesOverride, uomOverride, catUomOverride) => {
+  const applyPackRounding = (finalOrder, rule, uomConv) => {
+    if (uomConv.isPack && uomConv.packSize > 1 && !uomConv.hasConversion && (!rule || rule.caseSize == null) && finalOrder > 0) {
+      return Math.ceil(finalOrder / uomConv.packSize) * uomConv.packSize;
+    }
+    return finalOrder;
+  };
+
+  const recalc = (td, rulesOverride, uomOverride, catUomOverride, psOverride) => {
     const rules = rulesOverride ?? productRules;
     const uomMaps = uomOverride ?? uomMappings;
     const catUom = catUomOverride ?? categoryUomSettings;
+    const psRules = psOverride ?? prefixSuffixRules;
     setRows(prev => prev.map(r => {
-      const uomConv = getUomConversion(r, rules, catUom, uomMaps);
+      const uomConv = getUomConversion(r, rules, catUom, uomMaps, psRules);
       const s = calcOrder(r, td, uomConv.onHandToOrderFactor);
       const rule = rules.find(ru => String(ru.productId).trim() === String(r.product ?? "").trim());
       const onHandNum = parseFloat(r.on_hand);
-      const finalOrder = rule ? applyProductRule(rule, s ?? 0, isNaN(onHandNum) ? null : onHandNum) : (s ?? 0);
+      let finalOrder = rule ? applyProductRule(rule, s ?? 0, isNaN(onHandNum) ? null : onHandNum) : (s ?? 0);
+      finalOrder = applyPackRounding(finalOrder, rule, uomConv);
       const safeOrder = Math.max(0, finalOrder);
       const est_on_hand_after = !isNaN(onHandNum) ? onHandNum + safeOrder * uomConv.orderToOnHandFactor : null;
       return { ...r, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, uomConv };
@@ -867,15 +916,17 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
     setTargetLocal(td);
   };
 
-  const applyRulesToRows = (rules, uomOverride, catUomOverride) => {
+  const applyRulesToRows = (rules, uomOverride, catUomOverride, psOverride) => {
     const uomMaps = uomOverride ?? uomMappings;
     const catUom = catUomOverride ?? categoryUomSettings;
+    const psRules = psOverride ?? prefixSuffixRules;
     setRows(prev => prev.map(r => {
-      const uomConv = getUomConversion(r, rules, catUom, uomMaps);
+      const uomConv = getUomConversion(r, rules, catUom, uomMaps, psRules);
       const s = calcOrder(r, targetLocal, uomConv.onHandToOrderFactor);
       const rule = rules.find(ru => String(ru.productId).trim() === String(r.product ?? "").trim());
       const onHandNum = parseFloat(r.on_hand);
-      const finalOrder = rule ? applyProductRule(rule, s ?? 0, isNaN(onHandNum) ? null : onHandNum) : (s ?? 0);
+      let finalOrder = rule ? applyProductRule(rule, s ?? 0, isNaN(onHandNum) ? null : onHandNum) : (s ?? 0);
+      finalOrder = applyPackRounding(finalOrder, rule, uomConv);
       const safeOrder = Math.max(0, finalOrder);
       const est_on_hand_after = !isNaN(onHandNum) ? onHandNum + safeOrder * uomConv.orderToOnHandFactor : null;
       return { ...r, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, uomConv };
@@ -1322,6 +1373,108 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                 )}
               </div>
 
+              {/* Prefix/Suffix pack-size rules */}
+              <div style={{ background: C.surface, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
+                <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 6px" }}>PRODUCT ID PREFIX / SUFFIX RULES</p>
+                <p style={{ color: C.muted, fontSize: 12, margin: "0 0 10px" }}>
+                  Match products by a prefix or suffix in their ID to apply a pack-size conversion. Example: suffix <strong style={{ color: C.accent }}>BB</strong> → 1 BB = 24 on-hand units.
+                </p>
+                {/* Add rule form */}
+                <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr auto", gap: 8, alignItems: "end", marginBottom: 10 }}>
+                  <div>
+                    <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>MATCH BY</label>
+                    <div style={{ display: "flex", gap: 3 }}>
+                      {[["suffix", "Suffix"], ["prefix", "Prefix"]].map(([v, l]) => (
+                        <button key={v} onClick={() => setNewPsMatchType(v)} style={{
+                          padding: "5px 10px", borderRadius: 5, fontFamily: "inherit", fontWeight: 700, fontSize: 11, cursor: "pointer",
+                          border: `1px solid ${newPsMatchType === v ? C.purple : C.border}`,
+                          background: newPsMatchType === v ? C.purpleDim : "transparent",
+                          color: newPsMatchType === v ? C.purple : C.muted,
+                        }}>{l}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>{newPsMatchType === "suffix" ? "SUFFIX TEXT" : "PREFIX TEXT"}</label>
+                    <Input value={newPsText} onChange={e => setNewPsText(e.target.value)} placeholder={newPsMatchType === "suffix" ? "e.g. BB" : "e.g. SYN"} style={{ width: "100%" }} />
+                  </div>
+                  <div>
+                    <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>ON-HAND UNITS PER PACK</label>
+                    <Input type="number" value={newPsPackSize} onChange={e => setNewPsPackSize(e.target.value)} placeholder="e.g. 24" style={{ width: "100%" }} />
+                  </div>
+                  <Btn small onClick={() => {
+                    if (!newPsText.trim() || !newPsPackSize) return;
+                    const rule = { id: Date.now(), matchType: newPsMatchType, text: newPsText.trim(), purchaseSize: Number(newPsPackSize), orderMode: newPsOrderMode };
+                    const next = [...prefixSuffixRules.filter(r => !(r.matchType === rule.matchType && r.text === rule.text)), rule];
+                    savePsRules(next);
+                    applyRulesToRows(productRules, uomMappings, categoryUomSettings, next);
+                    setNewPsText(""); setNewPsPackSize("");
+                  }} disabled={!newPsText.trim() || !newPsPackSize}>Add</Btn>
+                </div>
+                {/* Order mode toggle */}
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "8px 12px", background: C.card, borderRadius: 8, border: `1px solid ${C.border}` }}>
+                  <span style={{ color: C.muted, fontSize: 12, fontWeight: 700 }}>ORDER QTY DISPLAY:</span>
+                  {[["pack", "By Pack (÷ pack size)"], ["unit", "By On-Hand Unit (round to pack)"]].map(([v, l]) => (
+                    <button key={v} onClick={() => setNewPsOrderMode(v)} style={{
+                      padding: "4px 12px", borderRadius: 6, fontFamily: "inherit", fontWeight: 700, fontSize: 12, cursor: "pointer",
+                      border: `1px solid ${newPsOrderMode === v ? C.accent : C.border}`,
+                      background: newPsOrderMode === v ? C.accentDim : "transparent",
+                      color: newPsOrderMode === v ? C.accent : C.muted,
+                    }}>{l}</button>
+                  ))}
+                  <span style={{ color: C.muted, fontSize: 11, marginLeft: 4 }}>
+                    {newPsOrderMode === "pack"
+                      ? `Order shows packs — e.g. 2 means 2 × ${newPsPackSize || "N"} = ${newPsPackSize ? 2 * Number(newPsPackSize) : "2N"} on-hand units`
+                      : `Order shows on-hand units, rounded up to nearest ${newPsPackSize || "N"}`}
+                  </span>
+                </div>
+
+                {/* Existing rules table */}
+                {prefixSuffixRules.length === 0 ? (
+                  <p style={{ color: C.muted, fontSize: 12, textAlign: "center", padding: "4px 0" }}>No prefix/suffix rules defined yet.</p>
+                ) : (
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead><tr style={{ background: C.card }}>
+                      {["Match", "Text", "Pack Size", "Order Mode", ""].map((h, i) => (
+                        <th key={i} style={{ padding: "6px 10px", textAlign: i >= 3 ? "right" : "left", color: C.muted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {prefixSuffixRules.map(r => (
+                        <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}33` }}>
+                          <td style={{ padding: "6px 10px", color: C.muted }}>{r.matchType}</td>
+                          <td style={{ padding: "6px 10px", color: C.purple, fontWeight: 700 }}>{r.text}</td>
+                          <td style={{ padding: "6px 10px", color: C.text }}>{r.purchaseSize} on-hand / pack</td>
+                          <td style={{ padding: "6px 10px", color: C.muted, textAlign: "right" }}>
+                            <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+                              {[["pack", "By Pack"], ["unit", "By Unit"]].map(([v, l]) => (
+                                <button key={v} onClick={() => {
+                                  const next = prefixSuffixRules.map(x => x.id === r.id ? { ...x, orderMode: v } : x);
+                                  savePsRules(next);
+                                  applyRulesToRows(productRules, uomMappings, categoryUomSettings, next);
+                                }} style={{
+                                  padding: "2px 8px", borderRadius: 4, fontFamily: "inherit", fontWeight: 700, fontSize: 10, cursor: "pointer",
+                                  border: `1px solid ${r.orderMode === v ? C.accent : C.border}`,
+                                  background: r.orderMode === v ? C.accentDim : "transparent",
+                                  color: r.orderMode === v ? C.accent : C.muted,
+                                }}>{l}</button>
+                              ))}
+                            </div>
+                          </td>
+                          <td style={{ padding: "6px 10px", textAlign: "right" }}>
+                            <Btn small variant="danger" onClick={() => {
+                              const next = prefixSuffixRules.filter(x => x.id !== r.id);
+                              savePsRules(next);
+                              applyRulesToRows(productRules, uomMappings, categoryUomSettings, next);
+                            }}>✕</Btn>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
               {/* Category-level UoM defaults */}
               {hasCategory && (() => {
                 const availableCategories = [...new Set(rows.map(r => r.category).filter(Boolean))].sort();
@@ -1572,10 +1725,6 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
             ) : displayed.map(r => {
               const edited = r.order !== r.suggested;
               const orderNum = Number(r.order) || 0;
-              // Per-row flags only apply in units mode (dollar mode is an order-total check)
-              const underMin = limitType === "units" && hasMin && orderNum > 0 && orderNum < orderLimits.orderMin;
-              const overMax = limitType === "units" && hasMax && orderNum > orderLimits.orderMax;
-              const limitFlag = overMax ? C.red : underMin ? C.orange : null;
               const extCost = hasCost && !isNaN(parseFloat(r.cost)) ? parseFloat(r.cost) * orderNum : null;
               const doh = r.days_on_hand;
               const dohColor = doh === null ? C.muted : doh < 3 ? C.red : doh < 7 ? C.orange : C.green;
@@ -1619,8 +1768,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                   <td style={{ padding: "9px 12px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                       <Input type="number" min={0} value={r.order} onChange={(e) => setOrder(r._idx, e.target.value)}
-                        style={{ width: 80, textAlign: "right", borderColor: limitFlag || (edited ? C.orange : C.border) }} />
-                      {limitFlag && <span style={{ color: limitFlag, fontSize: 16, lineHeight: 1 }} title={overMax ? `Over max (${fmtNum(orderLimits.orderMax, 0)} units)` : `Under min (${fmtNum(orderLimits.orderMin, 0)} units)`}>⚠</span>}
+                        style={{ width: 80, textAlign: "right", borderColor: edited ? C.orange : C.border }} />
                     </div>
                   </td>
                   {hasCost && <td style={{ padding: "9px 12px", color: C.muted, fontSize: 12, textAlign: "right" }}>{extCost !== null ? fmtCurrency(extCost) : "—"}</td>}
