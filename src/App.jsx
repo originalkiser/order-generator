@@ -620,8 +620,8 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
   // suggestion    = best matching saved mapping from localStorage (cross-session)
   const init = initialState || suggestion?.mapState || {};
   const [mapping, setMapping] = useState(init.mapping || {});
-  const [fieldMode, setFieldMode] = useState(init.fieldMode || { location: "column", product: "column", leadtime: "column" });
-  const [manualValues, setManualValues] = useState(init.manualValues || { location: "", product: "", leadtime: "" });
+  const [fieldMode, setFieldMode] = useState(init.fieldMode || { location: "column", product: "column", leadtime: "column", min_on_hand: "column", max_on_hand: "column" });
+  const [manualValues, setManualValues] = useState(init.manualValues || { location: "", product: "", leadtime: "", min_on_hand: "", max_on_hand: "" });
   const [targetDays, setTargetDays] = useState(init.targetDays ?? 14);
   const [usageMode, setUsageMode] = useState(init.usageMode || "direct");
   const [salesCol, setSalesCol] = useState(init.salesCol || "");
@@ -691,22 +691,37 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
     </div>
   );
 
-  const OptionalFieldCard = ({ field, label, description }) => (
-    <div style={{ background: C.card, borderRadius: 12, padding: "14px 18px", border: `1px solid ${mapping[field] ? C.accentDim : C.border}` }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <div>
-          <span style={{ color: C.text, fontWeight: 700, fontSize: 13 }}>{label}</span>
-          <span style={{ color: C.muted, fontSize: 11, marginLeft: 6 }}>optional</span>
+  const OptionalFieldCard = ({ field, label, description, withManual }) => {
+    const mode = withManual ? (fieldMode[field] || "column") : "column";
+    const isManual = mode === "manual";
+    const satisfied = isManual ? !!manualValues[field] : !!mapping[field];
+    return (
+      <div style={{ background: C.card, borderRadius: 12, padding: "14px 18px", border: `1px solid ${satisfied ? C.accentDim : C.border}` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div>
+            <span style={{ color: C.text, fontWeight: 700, fontSize: 13 }}>{label}</span>
+            <span style={{ color: C.muted, fontSize: 11, marginLeft: 6 }}>optional</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {withManual && <ModeToggle field={field} />}
+            {satisfied && <Badge color={C.green}>✓</Badge>}
+          </div>
         </div>
-        {mapping[field] && <Badge color={C.green}>✓</Badge>}
+        {isManual ? (
+          <Input type="number" value={manualValues[field] || ""}
+            onChange={e => setManualValues(m => ({ ...m, [field]: e.target.value }))}
+            placeholder={field === "min_on_hand" ? "e.g. 5" : "e.g. 50"}
+            style={{ width: "100%" }} />
+        ) : (
+          <Select value={mapping[field] || ""} onChange={(e) => set(field, e.target.value)} style={{ width: "100%" }}>
+            <option value="">— Not mapped —</option>
+            {headers.map((h, i) => <option key={i} value={h}>{h || `Column ${i + 1}`}</option>)}
+          </Select>
+        )}
+        {description && <p style={{ color: C.muted, fontSize: 11, margin: "6px 0 0", lineHeight: 1.4 }}>{description}</p>}
       </div>
-      <Select value={mapping[field] || ""} onChange={(e) => set(field, e.target.value)} style={{ width: "100%" }}>
-        <option value="">— Not mapped —</option>
-        {headers.map((h, i) => <option key={i} value={h}>{h || `Column ${i + 1}`}</option>)}
-      </Select>
-      {description && <p style={{ color: C.muted, fontSize: 11, margin: "6px 0 0", lineHeight: 1.4 }}>{description}</p>}
-    </div>
-  );
+    );
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
@@ -843,8 +858,8 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
           <OptionalFieldCard field="category" label="Category" description="Used for filtering and grouping your order by category." />
           <OptionalFieldCard field="cost" label="Cost (per unit)" description="Used to calculate total order value and cost-based order limits." />
           <OptionalFieldCard field="uom" label="Unit of Measure" description="Maps on-hand units to order units (e.g. quarts on hand, order in gallons) for accurate order quantities." />
-          <OptionalFieldCard field="min_on_hand" label="Min On Hand" description="Floor for on-hand quantity after delivery. The order will be raised to ensure this minimum is met." />
-          <OptionalFieldCard field="max_on_hand" label="Max On Hand" description="Ceiling for on-hand quantity after delivery. The order will be capped so this maximum is not exceeded." />
+          <OptionalFieldCard field="min_on_hand" label="Min On Hand" withManual description="Floor for on-hand quantity after delivery. The order will be raised to ensure this minimum is met." />
+          <OptionalFieldCard field="max_on_hand" label="Max On Hand" withManual description="Ceiling for on-hand quantity after delivery. The order will be capped so this maximum is not exceeded." />
         </div>
       </div>
 
@@ -1399,8 +1414,8 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
         category: hasCategory ? get("category") : "",
         cost: hasCost ? get("cost") : "",
         uom: hasUom ? get("uom") : "",
-        min_on_hand: mapping.min_on_hand ? get("min_on_hand") : "",
-        max_on_hand: mapping.max_on_hand ? get("max_on_hand") : "",
+        min_on_hand: (mapping.min_on_hand || manualEntry?.fieldMode?.min_on_hand === "manual") ? get("min_on_hand") : "",
+        max_on_hand: (mapping.max_on_hand || manualEntry?.fieldMode?.max_on_hand === "manual") ? get("max_on_hand") : "",
       };
       const productId = String(row.product ?? "").trim();
       const rule = (productRules || []).find(ru => String(ru.productId).trim() === productId);
@@ -1637,8 +1652,8 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
     { key: "on_hand_uom", label: "On Hand UoM", defaultWidth: 100 },
     { key: "daily_usage", label: usageConfig.mode === "calculated" ? `Daily Usage (÷${usageConfig.salesDays}d)` : "Daily Usage", defaultWidth: 120 },
     { key: "on_hand", label: "On Hand", defaultWidth: 90 },
-    ...(mapping.min_on_hand ? [{ key: "min_on_hand", label: "Min On Hand", defaultWidth: 100 }] : []),
-    ...(mapping.max_on_hand ? [{ key: "max_on_hand", label: "Max On Hand", defaultWidth: 100 }] : []),
+    ...(mapping.min_on_hand || manualEntry?.fieldMode?.min_on_hand === "manual" ? [{ key: "min_on_hand", label: "Min On Hand", defaultWidth: 100 }] : []),
+    ...(mapping.max_on_hand || manualEntry?.fieldMode?.max_on_hand === "manual" ? [{ key: "max_on_hand", label: "Max On Hand", defaultWidth: 100 }] : []),
     { key: "days_on_hand", label: "Days On Hand", defaultWidth: 110 },
     { key: "leadtime", label: "Lead Time", defaultWidth: 90 },
     { key: "suggested", label: "Suggested", defaultWidth: 100 },
