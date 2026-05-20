@@ -97,6 +97,14 @@ function savePrefixSuffixRules(r) {
   try { localStorage.setItem(LS_PS_KEY, JSON.stringify(r)); } catch {}
 }
 
+const LS_IGNORE_MAX_KEY = "ordergen_ignore_max_v1";
+function loadIgnoreMax() {
+  try { return JSON.parse(localStorage.getItem(LS_IGNORE_MAX_KEY) || "null") || { categories: [], products: [] }; } catch { return { categories: [], products: [] }; }
+}
+function saveIgnoreMax(v) {
+  try { localStorage.setItem(LS_IGNORE_MAX_KEY, JSON.stringify(v)); } catch {}
+}
+
 const LS_USAGE_ADJ_KEY = "ordergen_usage_adj_v1";
 function loadUsageAdjustments() {
   try { return JSON.parse(localStorage.getItem(LS_USAGE_ADJ_KEY) || "null") || { global: null, categories: {}, products: {} }; } catch { return { global: null, categories: {}, products: {} }; }
@@ -218,6 +226,64 @@ function applyProductRule(rule, suggestedQty, onHand) {
     }
   }
   return Math.max(0, qty);
+}
+
+// Compute suggested order qty based on order mode (days_supply vs min_max) and zero-usage fill setting
+function computeSuggested(row, effectiveOnHand, targetDays, uomConv, orderMode, zeroUsageFill) {
+  if (row._isTotal) return null;
+  const ohFactor = uomConv.orderToOnHandFactor ?? 1;
+  const minOH = row.min_on_hand !== "" ? parseFloat(row.min_on_hand) : NaN;
+  const maxOH = row.max_on_hand !== "" ? parseFloat(row.max_on_hand) : NaN;
+  const usageNum = parseFloat(row.daily_usage);
+  const hasUsage = !isNaN(usageNum) && usageNum > 0;
+
+  if (!hasUsage) {
+    const fill = zeroUsageFill || "none";
+    if (fill === "max" && !isNaN(maxOH) && effectiveOnHand !== null)
+      return Math.max(0, Math.ceil((maxOH - effectiveOnHand) / ohFactor));
+    if (fill === "min" && !isNaN(minOH) && effectiveOnHand !== null)
+      return Math.max(0, Math.ceil((minOH - effectiveOnHand) / ohFactor));
+    return 0;
+  }
+
+  if (orderMode === "min_max") {
+    if (!isNaN(minOH) && effectiveOnHand !== null) {
+      const leadNum = parseFloat(row.leadtime) || 0;
+      const projectedAtDelivery = effectiveOnHand - usageNum * leadNum;
+      if (effectiveOnHand <= minOH || projectedAtDelivery < minOH) {
+        if (!isNaN(maxOH))
+          return Math.max(0, Math.ceil((maxOH - effectiveOnHand) / ohFactor));
+        return calcOrder(row, targetDays, uomConv.onHandToOrderFactor, effectiveOnHand);
+      }
+      return 0;
+    }
+    return calcOrder(row, targetDays, uomConv.onHandToOrderFactor, effectiveOnHand);
+  }
+
+  return calcOrder(row, targetDays, uomConv.onHandToOrderFactor, effectiveOnHand);
+}
+
+// Apply per-row min/max on-hand-after constraints; returns updated order + constraint flags
+function applyOnHandConstraints(order, row, effectiveOnHand, uomConv, ignoreMax) {
+  if (row._isTotal || effectiveOnHand === null) return { order, minC: false, maxC: false };
+  const ohFactor = uomConv.orderToOnHandFactor ?? 1;
+  const minOH = row.min_on_hand !== "" ? parseFloat(row.min_on_hand) : NaN;
+  const maxOH = row.max_on_hand !== "" ? parseFloat(row.max_on_hand) : NaN;
+  const pid = String(row.product ?? "").trim();
+  const skipMax = ignoreMax && (
+    (row.category && ignoreMax.categories?.includes(row.category)) ||
+    ignoreMax.products?.includes(pid)
+  );
+  let minC = false, maxC = false;
+  if (!isNaN(minOH)) {
+    const mo = Math.ceil(Math.max(0, (minOH - effectiveOnHand) / ohFactor));
+    if (mo > order) { order = mo; minC = true; }
+  }
+  if (!isNaN(maxOH) && !skipMax) {
+    const mo = Math.floor(Math.max(0, (maxOH - effectiveOnHand) / ohFactor));
+    if (mo < order) { order = mo; maxC = true; }
+  }
+  return { order, minC, maxC };
 }
 
 function getUomConversion(row, productRules, categoryUomSettings, uomMappings, prefixSuffixRules = []) {
@@ -632,6 +698,9 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
   const [orderMax, setOrderMax] = useState(init.orderMax ?? "");
   const [orderLimitType, setOrderLimitType] = useState(init.orderLimitType || "dollars");
   const [showOrderLimits, setShowOrderLimits] = useState(false);
+  const [orderMode, setOrderMode] = useState(init.orderMode || "days_supply");
+  const [zeroUsageFill, setZeroUsageFill] = useState(init.zeroUsageFill || "none");
+  const [showOrderBehavior, setShowOrderBehavior] = useState(false);
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
   const showSuggestionBanner = suggestion && !initialState && !suggestionDismissed;
 
@@ -663,7 +732,7 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
   const currentMapState = () => ({
     mapping, fieldMode, manualValues, targetDays,
     usageMode, salesCol, salesDays,
-    orderMin, orderMax, orderLimitType,
+    orderMin, orderMax, orderLimitType, orderMode, zeroUsageFill,
   });
 
   const handleConfirm = () => {
@@ -673,7 +742,7 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
       mapping, targetDays,
       { mode: usageMode, salesCol, salesDays },
       { fieldMode, manualValues },
-      { orderMin: orderMin !== "" ? Number(orderMin) : null, orderMax: orderMax !== "" ? Number(orderMax) : null, limitType: orderLimitType },
+      { orderMin: orderMin !== "" ? Number(orderMin) : null, orderMax: orderMax !== "" ? Number(orderMax) : null, limitType: orderLimitType, orderMode, zeroUsageFill },
       ms  // pass full mapState back up for session memory
     );
   };
@@ -905,6 +974,61 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
                 <Input type="number" value={orderMax} onChange={e => setOrderMax(e.target.value)}
                   placeholder={orderLimitType === "dollars" ? "e.g. 5000" : "e.g. 144"} style={{ width: "100%" }} />
               </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* order behavior */}
+      <div style={{ background: C.card, borderRadius: 12, border: `1px solid ${(orderMode !== "days_supply" || zeroUsageFill !== "none") ? C.accentDim : C.border}`, overflow: "hidden" }}>
+        <button onClick={() => setShowOrderBehavior(v => !v)}
+          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ color: C.text, fontWeight: 700 }}>{showOrderBehavior ? "▼" : "▶"} Order Behavior</span>
+            <span style={{ color: C.muted, fontSize: 12 }}>optional — how orders are calculated</span>
+          </div>
+          {(orderMode !== "days_supply" || zeroUsageFill !== "none") && <Badge color={C.accent}>custom</Badge>}
+        </button>
+        {showOrderBehavior && (
+          <div style={{ padding: "0 20px 18px", display: "flex", flexDirection: "column", gap: 16 }}>
+            <div>
+              <label style={{ color: C.muted, fontSize: 11, fontWeight: 700, display: "block", marginBottom: 8 }}>ORDER CALCULATION MODE</label>
+              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                {[["days_supply", "Days of Supply"], ["min_max", "Min / Max"]].map(([val, lbl]) => (
+                  <button key={val} onClick={() => setOrderMode(val)} style={{
+                    padding: "6px 14px", borderRadius: 6, fontFamily: "inherit", fontWeight: 700, fontSize: 12, cursor: "pointer",
+                    border: `1px solid ${orderMode === val ? C.accent : C.border}`,
+                    background: orderMode === val ? C.accentDim : "transparent",
+                    color: orderMode === val ? C.accent : C.muted,
+                  }}>{lbl}</button>
+                ))}
+              </div>
+              <p style={{ color: C.muted, fontSize: 11, margin: 0, lineHeight: 1.5 }}>
+                {orderMode === "days_supply"
+                  ? "Standard formula: order enough to cover lead time + target days of supply. Min On Hand acts as a floor; Max On Hand caps the order."
+                  : "Reorder-point logic: trigger an order when on-hand is at or below Min On Hand, or usage will deplete below Min before delivery. Order fills to Max On Hand (or days-of-supply target if no Max is set)."}
+              </p>
+            </div>
+            <div>
+              <label style={{ color: C.muted, fontSize: 11, fontWeight: 700, display: "block", marginBottom: 8 }}>WHEN USAGE IS ZERO OR UNKNOWN</label>
+              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                {[["none", "No Order"], ["min", "Fill to Min"], ["max", "Fill to Max"]].map(([val, lbl]) => (
+                  <button key={val} onClick={() => setZeroUsageFill(val)} style={{
+                    padding: "6px 14px", borderRadius: 6, fontFamily: "inherit", fontWeight: 700, fontSize: 12, cursor: "pointer",
+                    border: `1px solid ${zeroUsageFill === val ? C.purple : C.border}`,
+                    background: zeroUsageFill === val ? C.purpleDim : "transparent",
+                    color: zeroUsageFill === val ? C.purple : C.muted,
+                  }}>{lbl}</button>
+                ))}
+              </div>
+              <p style={{ color: C.muted, fontSize: 11, margin: 0, lineHeight: 1.5 }}>
+                {zeroUsageFill === "none" ? "Products with no usage data will receive no order quantity." : zeroUsageFill === "min" ? "Fill to Min On Hand — order just enough to reach the minimum threshold." : "Fill to Max On Hand — order up to the maximum stocking level."}
+              </p>
+              {zeroUsageFill !== "none" && !mapping.min_on_hand && fieldMode.min_on_hand !== "manual" && !mapping.max_on_hand && fieldMode.max_on_hand !== "manual" && (
+                <div style={{ background: C.orange + "18", border: `1px solid ${C.orange}44`, borderRadius: 8, padding: "8px 12px", color: C.orange, fontSize: 12, marginTop: 8 }}>
+                  ⚠ Set a Min On Hand or Max On Hand above for the fill target.
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1426,25 +1550,15 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       const pendingKey = `${String(row.location || "").trim()}|${String(row.product || "").trim()}`.toLowerCase();
       const pendingQtyTotal = pendingOrdrs.reduce((s, po) => s + (po._index?.get(pendingKey) ?? 0), 0);
       const effectiveOnHand = isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal;
-      const suggested = _isTotal ? null : calcOrder(row, targetDays, uomConv.onHandToOrderFactor, effectiveOnHand);
+      const _orderMode = orderLimits?.orderMode || "days_supply";
+      const _zeroFill = orderLimits?.zeroUsageFill || "none";
+      const suggested = computeSuggested(row, effectiveOnHand, targetDays, uomConv, _orderMode, _zeroFill);
       let finalOrder = _isTotal ? 0 : (rule ? applyProductRule(rule, suggested ?? 0, effectiveOnHand) : (suggested ?? 0));
       if (!_isTotal && uomConv.isPack && uomConv.packSize > 1 && !uomConv.hasConversion && (!rule || rule.caseSize == null) && finalOrder > 0) {
         finalOrder = Math.ceil(finalOrder / uomConv.packSize) * uomConv.packSize;
       }
-      let _minConstrained = false, _maxConstrained = false;
-      if (!_isTotal && effectiveOnHand !== null) {
-        const ohFactor = uomConv.orderToOnHandFactor ?? 1;
-        const minOH = row.min_on_hand !== "" ? parseFloat(row.min_on_hand) : NaN;
-        const maxOH = row.max_on_hand !== "" ? parseFloat(row.max_on_hand) : NaN;
-        if (!isNaN(minOH)) {
-          const minOrd = Math.ceil(Math.max(0, (minOH - effectiveOnHand) / ohFactor));
-          if (minOrd > finalOrder) { finalOrder = minOrd; _minConstrained = true; }
-        }
-        if (!isNaN(maxOH)) {
-          const maxOrd = Math.floor(Math.max(0, (maxOH - effectiveOnHand) / ohFactor));
-          if (maxOrd < finalOrder) { finalOrder = maxOrd; _maxConstrained = true; }
-        }
-      }
+      const { order: _constrained, minC: _minConstrained, maxC: _maxConstrained } = applyOnHandConstraints(finalOrder, row, effectiveOnHand, uomConv, ignoreMax);
+      finalOrder = _constrained;
       const safeOrder = Math.max(0, finalOrder);
       const est_on_hand_after = !_isTotal && !isNaN(onHandNum) ? onHandNum + pendingQtyTotal + safeOrder * uomConv.orderToOnHandFactor : null;
       const units_ordered = !_isTotal && !isNaN(safeOrder) ? Math.round(safeOrder * (uomConv.orderToOnHandFactor ?? 1)) : null;
@@ -1462,6 +1576,12 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState(1);
   const [hideZero, setHideZero] = useState(false);
+  const [ignoreMax, setIgnoreMax] = useState(() => loadIgnoreMax());
+  const [ignoreMaxExpanded, setIgnoreMaxExpanded] = useState(false);
+  const [newIgnoreMaxCat, setNewIgnoreMaxCat] = useState("");
+  const [newIgnoreMaxProd, setNewIgnoreMaxProd] = useState("");
+  const saveIgnoreMaxState = (v) => { setIgnoreMax(v); saveIgnoreMax(v); };
+
   const [usageAdj, setUsageAdj] = useState(() => loadUsageAdjustments());
   const [adjExpanded, setAdjExpanded] = useState(false);
   const [newAdjGlobal, setNewAdjGlobal] = useState("");
@@ -1494,18 +1614,14 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       const adjMult = getUsageMultiplier(r.product, r.category, adj);
       const effectiveDailyUsage = isNaN(parseFloat(r._rawUsage ?? r.daily_usage)) ? r.daily_usage : parseFloat(r._rawUsage ?? r.daily_usage) * adjMult;
       const adjRow = { ...r, daily_usage: effectiveDailyUsage };
-      const s = r._isTotal ? null : calcOrder(adjRow, td, uomConv.onHandToOrderFactor, effectiveOnHand);
+      const _om = orderLimits?.orderMode || "days_supply";
+      const _zf = orderLimits?.zeroUsageFill || "none";
+      const s = computeSuggested(adjRow, effectiveOnHand, td, uomConv, _om, _zf);
       const rule = rules.find(ru => String(ru.productId).trim() === String(r.product ?? "").trim());
-      let finalOrder = rule ? applyProductRule(rule, s ?? 0, effectiveOnHand) : (s ?? 0);
+      let finalOrder = r._isTotal ? 0 : (rule ? applyProductRule(rule, s ?? 0, effectiveOnHand) : (s ?? 0));
       finalOrder = applyPackRounding(finalOrder, rule, uomConv);
-      let _minConstrained = false, _maxConstrained = false;
-      if (!r._isTotal && effectiveOnHand !== null) {
-        const ohFactor = uomConv.orderToOnHandFactor ?? 1;
-        const minOH = r.min_on_hand !== "" ? parseFloat(r.min_on_hand) : NaN;
-        const maxOH = r.max_on_hand !== "" ? parseFloat(r.max_on_hand) : NaN;
-        if (!isNaN(minOH)) { const mo = Math.ceil(Math.max(0, (minOH - effectiveOnHand) / ohFactor)); if (mo > finalOrder) { finalOrder = mo; _minConstrained = true; } }
-        if (!isNaN(maxOH)) { const mo = Math.floor(Math.max(0, (maxOH - effectiveOnHand) / ohFactor)); if (mo < finalOrder) { finalOrder = mo; _maxConstrained = true; } }
-      }
+      const { order: _co, minC: _minConstrained, maxC: _maxConstrained } = applyOnHandConstraints(finalOrder, r, effectiveOnHand, uomConv, ignoreMax);
+      finalOrder = _co;
       const safeOrder = Math.max(0, finalOrder);
       const est_on_hand_after = r._isTotal || isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal + safeOrder * uomConv.orderToOnHandFactor;
       const days_on_hand = calcDaysOnHand(adjRow);
@@ -1531,18 +1647,14 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       const adjMult = getUsageMultiplier(r.product, r.category, usageAdj);
       const effectiveDailyUsage = isNaN(parseFloat(r._rawUsage ?? r.daily_usage)) ? r.daily_usage : parseFloat(r._rawUsage ?? r.daily_usage) * adjMult;
       const adjRow = { ...r, daily_usage: effectiveDailyUsage };
-      const s = r._isTotal ? null : calcOrder(adjRow, targetLocal, uomConv.onHandToOrderFactor, effectiveOnHand);
+      const _om2 = orderLimits?.orderMode || "days_supply";
+      const _zf2 = orderLimits?.zeroUsageFill || "none";
+      const s = computeSuggested(adjRow, effectiveOnHand, targetLocal, uomConv, _om2, _zf2);
       const rule = rules.find(ru => String(ru.productId).trim() === String(r.product ?? "").trim());
-      let finalOrder = rule ? applyProductRule(rule, s ?? 0, effectiveOnHand) : (s ?? 0);
+      let finalOrder = r._isTotal ? 0 : (rule ? applyProductRule(rule, s ?? 0, effectiveOnHand) : (s ?? 0));
       finalOrder = applyPackRounding(finalOrder, rule, uomConv);
-      let _minConstrained = false, _maxConstrained = false;
-      if (!r._isTotal && effectiveOnHand !== null) {
-        const ohFactor = uomConv.orderToOnHandFactor ?? 1;
-        const minOH = r.min_on_hand !== "" ? parseFloat(r.min_on_hand) : NaN;
-        const maxOH = r.max_on_hand !== "" ? parseFloat(r.max_on_hand) : NaN;
-        if (!isNaN(minOH)) { const mo = Math.ceil(Math.max(0, (minOH - effectiveOnHand) / ohFactor)); if (mo > finalOrder) { finalOrder = mo; _minConstrained = true; } }
-        if (!isNaN(maxOH)) { const mo = Math.floor(Math.max(0, (maxOH - effectiveOnHand) / ohFactor)); if (mo < finalOrder) { finalOrder = mo; _maxConstrained = true; } }
-      }
+      const { order: _co2, minC: _minConstrained, maxC: _maxConstrained } = applyOnHandConstraints(finalOrder, r, effectiveOnHand, uomConv, ignoreMax);
+      finalOrder = _co2;
       const safeOrder = Math.max(0, finalOrder);
       const est_on_hand_after = r._isTotal || isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal + safeOrder * uomConv.orderToOnHandFactor;
       const days_on_hand = calcDaysOnHand(adjRow);
@@ -2326,6 +2438,79 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
           </div>
         )}
       </div>
+
+      {/* ignore-max exceptions */}
+          {(mapping.max_on_hand || manualEntry?.fieldMode?.max_on_hand === "manual") && (
+            <div style={{ background: C.surface, borderRadius: 10, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+              <button onClick={() => setIgnoreMaxExpanded(v => !v)}
+                style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ color: C.text, fontWeight: 700, fontSize: 13 }}>{ignoreMaxExpanded ? "▼" : "▶"} Max On Hand Exceptions</span>
+                  {(ignoreMax.categories.length > 0 || ignoreMax.products.length > 0) && (
+                    <Badge color={C.orange}>{ignoreMax.categories.length + ignoreMax.products.length} excluded</Badge>
+                  )}
+                </div>
+                <span style={{ color: C.muted, fontSize: 11 }}>categories / products that ignore the max cap</span>
+              </button>
+              {ignoreMaxExpanded && (
+                <div style={{ padding: "0 16px 16px", display: "flex", flexDirection: "column", gap: 14 }}>
+                  {hasCategory && (
+                    <div>
+                      <label style={{ color: C.muted, fontSize: 11, fontWeight: 700, display: "block", marginBottom: 6 }}>EXCLUDE CATEGORY</label>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                        <Select value={newIgnoreMaxCat} onChange={e => setNewIgnoreMaxCat(e.target.value)} style={{ flex: 1 }}>
+                          <option value="">— select category —</option>
+                          {[...new Set(rows.map(r => r.category).filter(Boolean))].sort().filter(c => !ignoreMax.categories.includes(c)).map(c => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </Select>
+                        <Btn small variant="ghost" onClick={() => {
+                          if (!newIgnoreMaxCat) return;
+                          const next = { ...ignoreMax, categories: [...ignoreMax.categories, newIgnoreMaxCat] };
+                          saveIgnoreMaxState(next); setNewIgnoreMaxCat(""); recalc(targetLocal);
+                        }}>Add</Btn>
+                      </div>
+                      {ignoreMax.categories.length > 0 && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {ignoreMax.categories.map(c => (
+                            <span key={c} style={{ background: C.orange + "22", color: C.orange, border: `1px solid ${C.orange}44`, borderRadius: 6, padding: "3px 10px", fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                              {c}
+                              <button onClick={() => { const next = { ...ignoreMax, categories: ignoreMax.categories.filter(x => x !== c) }; saveIgnoreMaxState(next); recalc(targetLocal); }}
+                                style={{ background: "none", border: "none", cursor: "pointer", color: C.orange, fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div>
+                    <label style={{ color: C.muted, fontSize: 11, fontWeight: 700, display: "block", marginBottom: 6 }}>EXCLUDE PRODUCT</label>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                      <Input value={newIgnoreMaxProd} onChange={e => setNewIgnoreMaxProd(e.target.value)}
+                        placeholder="Product ID" style={{ flex: 1 }} />
+                      <Btn small variant="ghost" onClick={() => {
+                        const p = newIgnoreMaxProd.trim();
+                        if (!p || ignoreMax.products.includes(p)) return;
+                        const next = { ...ignoreMax, products: [...ignoreMax.products, p] };
+                        saveIgnoreMaxState(next); setNewIgnoreMaxProd(""); recalc(targetLocal);
+                      }}>Add</Btn>
+                    </div>
+                    {ignoreMax.products.length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {ignoreMax.products.map(p => (
+                          <span key={p} style={{ background: C.orange + "22", color: C.orange, border: `1px solid ${C.orange}44`, borderRadius: 6, padding: "3px 10px", fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                            {p}
+                            <button onClick={() => { const next = { ...ignoreMax, products: ignoreMax.products.filter(x => x !== p) }; saveIgnoreMaxState(next); recalc(targetLocal); }}
+                              style={{ background: "none", border: "none", cursor: "pointer", color: C.orange, fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
       {/* usage adjustment panel */}
       <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
