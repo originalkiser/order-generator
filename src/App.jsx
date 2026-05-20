@@ -106,8 +106,10 @@ function saveTablePrefs(p) {
 }
 
 function isTotalRow(row) {
-  const val = String(row.product ?? "").trim().toLowerCase().replace(/[:\s]+$/, "");
-  return val === "total" || val === "grand total" || val === "subtotal" || val === "sub total";
+  const val = String(row.product ?? "").trim().toLowerCase().replace(/[:\s*.-]+$/, "").trim();
+  if (!val) return false;
+  return /^(grand\s+)?(sub[-\s]?)?totals?(\s+(items?|products?|rows?|units?|qty|quantity|amount|value|cost|price))?$/.test(val)
+    || val === "order total" || val === "order totals";
 }
 
 function buildPendingIndex(po) {
@@ -304,7 +306,7 @@ const Select = ({ value, onChange, children, style: extra }) => (
 );
 
 // ── step bar ──────────────────────────────────────────────────────────────────
-const STEPS = ["Upload", "Map Columns", "Review Order", "Export"];
+const STEPS = ["Upload", "Map Columns", "Unit of Measure", "Review Order", "Export"];
 const StepBar = ({ current }) => (
   <div style={{ display: "flex", gap: 0, marginBottom: 36 }}>
     {STEPS.map((s, i) => {
@@ -891,8 +893,334 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
   );
 }
 
+// ── STEP 2 (between Map and Review): Unit of Measure ─────────────────────────
+function UomStep({ rawRows, headers, mapping, usageConfig, manualEntry, hasCategory, hasUom, productRules, initialUomMappings, initialCategoryUomSettings, initialPrefixSuffixRules, onBack, onConfirm }) {
+  const [uomMappings, setUomMappings] = useState(initialUomMappings || []);
+  const [categoryUomSettings, setCategoryUomSettings] = useState(initialCategoryUomSettings || {});
+  const [prefixSuffixRules, setPrefixSuffixRules] = useState(initialPrefixSuffixRules || []);
+  const [psIgnored, setPsIgnored] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("ordergen_ps_ignored_v1") || "[]")); } catch { return new Set(); }
+  });
+  const [psDetected, setPsDetected] = useState(null);
+  const [newPsMatchType, setNewPsMatchType] = useState("suffix");
+  const [newPsText, setNewPsText] = useState("");
+  const [newPsPackSize, setNewPsPackSize] = useState("");
+  const [newPsOrderMode, setNewPsOrderMode] = useState("pack");
+  const [newUomFrom, setNewUomFrom] = useState("");
+  const [newUomTo, setNewUomTo] = useState("");
+  const [newUomFactor, setNewUomFactor] = useState("");
+  const [newCatKey, setNewCatKey] = useState("");
+  const [newCatOnHandUom, setNewCatOnHandUom] = useState("");
+  const [newCatOrderUom, setNewCatOrderUom] = useState("");
+
+  const savePsRulesLocal = (r) => { setPrefixSuffixRules(r); savePrefixSuffixRules(r); };
+
+  const previewRows = rawRows.map(r => {
+    const get = (field) => {
+      if (manualEntry?.fieldMode?.[field] === "manual") return trimVal(manualEntry.manualValues?.[field] ?? "");
+      const idx = headers.indexOf(mapping[field]);
+      return idx >= 0 ? trimVal(r[idx]) : "";
+    };
+    return { product: get("product"), category: hasCategory ? get("category") : "", uom: hasUom ? get("uom") : "" };
+  });
+
+  const uomPairs = (() => {
+    const m = new Map();
+    previewRows.forEach(r => {
+      const conv = getUomConversion(r, productRules, categoryUomSettings, uomMappings, prefixSuffixRules);
+      if (conv.onHandUom || conv.orderUom) {
+        const k = `${conv.onHandUom || ""}|${conv.orderUom || ""}`;
+        if (!m.has(k)) m.set(k, { onHand: conv.onHandUom || "—", order: conv.orderUom || "—", hasConversion: conv.hasConversion, missing: conv.conversionMissing });
+      }
+    });
+    return [...m.values()];
+  })();
+
+  const availableCategories = hasCategory ? [...new Set(previewRows.map(r => r.category).filter(Boolean))].sort() : [];
+  const allProductIds = previewRows.map(r => String(r.product || "").trim()).filter(Boolean);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div>
+        <h2 style={{ color: C.text, fontSize: 22, fontWeight: 800, margin: 0 }}>Unit of Measure</h2>
+        <p style={{ color: C.muted, marginTop: 6 }}>Configure how on-hand units convert to order units</p>
+      </div>
+
+      {uomPairs.length > 0 && (
+        <div style={{ background: C.surface, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
+          <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 10px" }}>UoM STATUS — UPLOADED DATA</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {uomPairs.map((p, i) => {
+              const isSame = p.onHand === p.order || (!p.order || p.order === "—");
+              const icon = p.hasConversion ? "✓" : p.missing ? "⚠" : "→";
+              const color = p.hasConversion ? C.green : p.missing ? C.orange : C.muted;
+              const desc = p.hasConversion ? `${p.onHand} → ${p.order} (mapped)` : p.missing ? `${p.onHand} → ${p.order} — no mapping found, will use 1:1` : isSame ? `${p.onHand} (same unit, 1:1)` : `${p.onHand} (no order UoM set, 1:1)`;
+              return (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 8px", background: C.card, borderRadius: 6, border: `1px solid ${color}33` }}>
+                  <span style={{ color, fontWeight: 700, fontSize: 14, width: 16, textAlign: "center" }}>{icon}</span>
+                  <span style={{ color: C.text, fontSize: 12 }}>{desc}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Unit conversion definitions */}
+      <div style={{ background: C.surface, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
+        <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 10px" }}>UNIT CONVERSIONS</p>
+        <div style={{ background: C.purple + "11", border: `1px solid ${C.purple}33`, borderRadius: 8, padding: "8px 12px", color: C.purple, fontSize: 12, marginBottom: 12 }}>
+          Define how on-hand units convert to order units. Example: 1 qt = 0.25 gal (ordering in gallons when stock is tracked in quarts).
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr auto auto", gap: 8, alignItems: "end", marginBottom: 10 }}>
+          <div>
+            <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>FROM (ON HAND)</label>
+            <Input value={newUomFrom} onChange={e => setNewUomFrom(e.target.value)} placeholder="e.g. qt" style={{ width: "100%" }} />
+          </div>
+          <span style={{ color: C.muted, fontSize: 13, paddingBottom: 8 }}>→</span>
+          <div>
+            <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>TO (ORDER)</label>
+            <Input value={newUomTo} onChange={e => setNewUomTo(e.target.value)} placeholder="e.g. gal" style={{ width: "100%" }} />
+          </div>
+          <div>
+            <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>FACTOR (1 FROM = ? TO)</label>
+            <Input type="number" value={newUomFactor} onChange={e => setNewUomFactor(e.target.value)} placeholder="e.g. 0.25" style={{ width: 110 }} />
+          </div>
+          <Btn small onClick={() => {
+            if (!newUomFrom.trim() || !newUomTo.trim() || newUomFactor === "") return;
+            const next = [...uomMappings.filter(u => !(u.fromUnit === newUomFrom.trim() && u.toUnit === newUomTo.trim())),
+              { fromUnit: newUomFrom.trim(), toUnit: newUomTo.trim(), factor: Number(newUomFactor) }];
+            setUomMappings(next); saveUomMappings(next);
+            setNewUomFrom(""); setNewUomTo(""); setNewUomFactor("");
+          }} disabled={!newUomFrom.trim() || !newUomTo.trim() || newUomFactor === ""}>Add</Btn>
+        </div>
+        {uomMappings.length === 0 ? (
+          <p style={{ color: C.muted, fontSize: 12, textAlign: "center", padding: "8px 0" }}>No conversions defined yet.</p>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead><tr style={{ background: C.card }}>
+              {["On Hand Unit", "→", "Order Unit", "Factor", "Reverse", ""].map((h, i) => (
+                <th key={i} style={{ padding: "6px 10px", textAlign: i > 2 ? "right" : "left", color: C.muted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {uomMappings.map((u, i) => (
+                <tr key={i} style={{ borderBottom: `1px solid ${C.border}33` }}>
+                  <td style={{ padding: "6px 10px", color: C.text, fontWeight: 600 }}>{u.fromUnit}</td>
+                  <td style={{ padding: "6px 10px", color: C.muted }}>→</td>
+                  <td style={{ padding: "6px 10px", color: C.text, fontWeight: 600 }}>{u.toUnit}</td>
+                  <td style={{ padding: "6px 10px", color: C.purple, fontWeight: 700, textAlign: "right" }}>{u.factor}</td>
+                  <td style={{ padding: "6px 10px", color: C.muted, textAlign: "right" }}>{u.factor > 0 ? `${(1/u.factor).toFixed(4).replace(/\.?0+$/, "")} ${u.fromUnit}/${u.toUnit}` : "—"}</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right" }}>
+                    <Btn small variant="danger" onClick={() => {
+                      const next = uomMappings.filter((_, j) => j !== i);
+                      setUomMappings(next); saveUomMappings(next);
+                    }}>✕</Btn>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Prefix/Suffix pack-size rules */}
+      <div style={{ background: C.surface, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
+        <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 6px" }}>PRODUCT ID PREFIX / SUFFIX RULES</p>
+        <p style={{ color: C.muted, fontSize: 12, margin: "0 0 10px" }}>
+          Match products by a prefix or suffix in their ID to apply a pack-size conversion. Example: suffix <strong style={{ color: C.accent }}>BB</strong> → 1 BB = 24 on-hand units.
+        </p>
+        <div style={{ background: C.card, borderRadius: 8, padding: "10px 12px", marginBottom: 12, border: `1px solid ${C.border}` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: psDetected !== null ? 10 : 0 }}>
+            <span style={{ color: C.muted, fontSize: 11, fontWeight: 700, flex: 1 }}>AUTO-DETECT PATTERNS (1–3 letters)</span>
+            <Btn small variant="ghost" onClick={() => setPsDetected(detectPrefixSuffixPatterns(allProductIds, psIgnored))}>Detect</Btn>
+            {psDetected !== null && <Btn small variant="ghost" onClick={() => setPsDetected(null)}>Clear</Btn>}
+          </div>
+          {psDetected !== null && (psDetected.length === 0 ? (
+            <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>No significant patterns found in product IDs.</p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 260, overflowY: "auto" }}>
+              {psDetected.map(p => {
+                const typeColor = p.type === "prefix" ? C.accent : p.type === "suffix" ? C.purple : C.orange;
+                const alreadyAdded = p.type !== "both" && prefixSuffixRules.some(r => r.matchType === p.type && r.text === p.text);
+                return (
+                  <div key={p.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 8px", background: C.surface, borderRadius: 6 }}>
+                    <span style={{ color: typeColor, fontWeight: 700, fontSize: 10, minWidth: 46, letterSpacing: 0.5 }}>{p.type.toUpperCase()}</span>
+                    <span style={{ color: C.text, fontWeight: 700, fontSize: 13, fontFamily: "monospace", minWidth: 44 }}>{p.text}</span>
+                    <span style={{ color: C.muted, fontSize: 11, flex: 1 }}>{p.count} products · e.g. {p.examples.slice(0, 2).join(", ")}</span>
+                    {!alreadyAdded && (
+                      <Btn small variant="ghost" onClick={() => {
+                        const newRules = p.type === "both"
+                          ? [{ id: Date.now(), matchType: "prefix", text: p.prefix, purchaseSize: 1, orderMode: "unit" }, { id: Date.now() + 1, matchType: "suffix", text: p.suffix, purchaseSize: 1, orderMode: "unit" }]
+                          : [{ id: Date.now(), matchType: p.type, text: p.text, purchaseSize: 1, orderMode: "unit" }];
+                        const next = [...prefixSuffixRules, ...newRules.filter(nr => !prefixSuffixRules.some(r => r.matchType === nr.matchType && r.text === nr.text))];
+                        savePsRulesLocal(next);
+                        setPsDetected(prev => prev.filter(x => x.key !== p.key));
+                      }}>Use</Btn>
+                    )}
+                    {alreadyAdded && <span style={{ color: C.green, fontSize: 11 }}>✓ Added</span>}
+                    <Btn small variant="ghost" onClick={() => {
+                      const next = new Set(psIgnored); next.add(p.key);
+                      setPsIgnored(next);
+                      try { localStorage.setItem("ordergen_ps_ignored_v1", JSON.stringify([...next])); } catch {}
+                      setPsDetected(prev => prev.filter(x => x.key !== p.key));
+                    }}>Ignore</Btn>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+          {psIgnored.size > 0 && (
+            <div style={{ marginTop: psDetected !== null ? 10 : 6, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+              <span style={{ color: C.muted, fontSize: 10, fontWeight: 700 }}>IGNORED PATTERNS</span>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 5 }}>
+                {[...psIgnored].map(key => {
+                  const parts = key.split(":");
+                  const typeLabel = parts[0];
+                  const text = parts.slice(1).join(":");
+                  return (
+                    <div key={key} style={{ display: "flex", alignItems: "center", gap: 5, padding: "2px 8px", background: C.surface, borderRadius: 10, border: `1px solid ${C.border}` }}>
+                      <span style={{ color: C.muted, fontSize: 9, fontWeight: 700 }}>{typeLabel.toUpperCase()}</span>
+                      <span style={{ color: C.text, fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{text}</span>
+                      <button onClick={() => {
+                        const next = new Set(psIgnored); next.delete(key);
+                        setPsIgnored(next);
+                        try { localStorage.setItem("ordergen_ps_ignored_v1", JSON.stringify([...next])); } catch {}
+                      }} title="Re-enable" style={{ background: "none", border: "none", color: C.green, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: 0, lineHeight: 1 }}>↩</button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr auto", gap: 8, alignItems: "end", marginBottom: 10 }}>
+          <div>
+            <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>MATCH BY</label>
+            <div style={{ display: "flex", gap: 3 }}>
+              {[["suffix", "Suffix"], ["prefix", "Prefix"]].map(([v, l]) => (
+                <button key={v} onClick={() => setNewPsMatchType(v)} style={{ padding: "5px 10px", borderRadius: 5, fontFamily: "inherit", fontWeight: 700, fontSize: 11, cursor: "pointer", border: `1px solid ${newPsMatchType === v ? C.purple : C.border}`, background: newPsMatchType === v ? C.purpleDim : "transparent", color: newPsMatchType === v ? C.purple : C.muted }}>{l}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>{newPsMatchType === "suffix" ? "SUFFIX TEXT" : "PREFIX TEXT"}</label>
+            <Input value={newPsText} onChange={e => setNewPsText(e.target.value)} placeholder={newPsMatchType === "suffix" ? "e.g. BB" : "e.g. SYN"} style={{ width: "100%" }} />
+          </div>
+          <div>
+            <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>ON-HAND UNITS PER PACK</label>
+            <Input type="number" value={newPsPackSize} onChange={e => setNewPsPackSize(e.target.value)} placeholder="e.g. 24" style={{ width: "100%" }} />
+          </div>
+          <Btn small onClick={() => {
+            if (!newPsText.trim() || !newPsPackSize) return;
+            const rule = { id: Date.now(), matchType: newPsMatchType, text: newPsText.trim(), purchaseSize: Number(newPsPackSize), orderMode: newPsOrderMode };
+            const next = [...prefixSuffixRules.filter(r => !(r.matchType === rule.matchType && r.text === rule.text)), rule];
+            savePsRulesLocal(next); setNewPsText(""); setNewPsPackSize("");
+          }} disabled={!newPsText.trim() || !newPsPackSize}>Add</Btn>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "8px 12px", background: C.card, borderRadius: 8, border: `1px solid ${C.border}` }}>
+          <span style={{ color: C.muted, fontSize: 12, fontWeight: 700 }}>ORDER QTY DISPLAY:</span>
+          {[["pack", "By Pack (÷ pack size)"], ["unit", "By On-Hand Unit (round to pack)"]].map(([v, l]) => (
+            <button key={v} onClick={() => setNewPsOrderMode(v)} style={{ padding: "4px 12px", borderRadius: 6, fontFamily: "inherit", fontWeight: 700, fontSize: 12, cursor: "pointer", border: `1px solid ${newPsOrderMode === v ? C.accent : C.border}`, background: newPsOrderMode === v ? C.accentDim : "transparent", color: newPsOrderMode === v ? C.accent : C.muted }}>{l}</button>
+          ))}
+          <span style={{ color: C.muted, fontSize: 11, marginLeft: 4 }}>
+            {newPsOrderMode === "pack" ? `Order shows packs — e.g. 2 means 2 × ${newPsPackSize || "N"} = ${newPsPackSize ? 2 * Number(newPsPackSize) : "2N"} on-hand units` : `Order shows on-hand units, rounded up to nearest ${newPsPackSize || "N"}`}
+          </span>
+        </div>
+        {prefixSuffixRules.length === 0 ? (
+          <p style={{ color: C.muted, fontSize: 12, textAlign: "center", padding: "4px 0" }}>No prefix/suffix rules defined yet.</p>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead><tr style={{ background: C.card }}>
+              {["Match", "Text", "Pack Size", "Order Mode", ""].map((h, i) => (
+                <th key={i} style={{ padding: "6px 10px", textAlign: i >= 3 ? "right" : "left", color: C.muted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {prefixSuffixRules.map(r => (
+                <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}33` }}>
+                  <td style={{ padding: "6px 10px", color: C.muted }}>{r.matchType}</td>
+                  <td style={{ padding: "6px 10px", color: C.purple, fontWeight: 700 }}>{r.text}</td>
+                  <td style={{ padding: "6px 10px", color: C.text }}>{r.purchaseSize} on-hand / pack</td>
+                  <td style={{ padding: "6px 10px", color: C.muted, textAlign: "right" }}>
+                    <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+                      {[["pack", "By Pack"], ["unit", "By Unit"]].map(([v, l]) => (
+                        <button key={v} onClick={() => { const next = prefixSuffixRules.map(x => x.id === r.id ? { ...x, orderMode: v } : x); savePsRulesLocal(next); }}
+                          style={{ padding: "2px 8px", borderRadius: 4, fontFamily: "inherit", fontWeight: 700, fontSize: 10, cursor: "pointer", border: `1px solid ${r.orderMode === v ? C.accent : C.border}`, background: r.orderMode === v ? C.accentDim : "transparent", color: r.orderMode === v ? C.accent : C.muted }}>{l}</button>
+                      ))}
+                    </div>
+                  </td>
+                  <td style={{ padding: "6px 10px", textAlign: "right" }}>
+                    <Btn small variant="danger" onClick={() => savePsRulesLocal(prefixSuffixRules.filter(x => x.id !== r.id))}>✕</Btn>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {hasCategory && availableCategories.length > 0 && (
+        <div style={{ background: C.surface, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
+          <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 10px" }}>CATEGORY DEFAULTS</p>
+          <p style={{ color: C.muted, fontSize: 12, margin: "0 0 10px" }}>Set UoM for an entire category. Per-product rules override these.</p>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr auto", gap: 8, alignItems: "end", marginBottom: 10 }}>
+            <div>
+              <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>CATEGORY</label>
+              <datalist id="uom-cat-list-step">{availableCategories.map(c => <option key={c} value={c} />)}</datalist>
+              <Input value={newCatKey} onChange={e => setNewCatKey(e.target.value)} placeholder="e.g. Paint" style={{ width: "100%" }} list="uom-cat-list-step" />
+            </div>
+            <div>
+              <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>ON HAND UOM</label>
+              <Input value={newCatOnHandUom} onChange={e => setNewCatOnHandUom(e.target.value)} placeholder="e.g. qt" style={{ width: "100%" }} />
+            </div>
+            <div>
+              <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>ORDER UOM</label>
+              <Input value={newCatOrderUom} onChange={e => setNewCatOrderUom(e.target.value)} placeholder="e.g. gal" style={{ width: "100%" }} />
+            </div>
+            <Btn small onClick={() => {
+              if (!newCatKey.trim() || !newCatOnHandUom.trim() || !newCatOrderUom.trim()) return;
+              const next = { ...categoryUomSettings, [newCatKey.trim()]: { onHandUom: newCatOnHandUom.trim(), orderUom: newCatOrderUom.trim() } };
+              setCategoryUomSettings(next); saveCategoryUom(next);
+              setNewCatKey(""); setNewCatOnHandUom(""); setNewCatOrderUom("");
+            }} disabled={!newCatKey.trim() || !newCatOnHandUom.trim() || !newCatOrderUom.trim()}>Save</Btn>
+          </div>
+          {Object.keys(categoryUomSettings).length === 0 ? (
+            <p style={{ color: C.muted, fontSize: 12, textAlign: "center", padding: "4px 0" }}>No category defaults set.</p>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead><tr style={{ background: C.card }}>
+                {["Category", "On Hand UoM", "Order UoM", ""].map((h, i) => (
+                  <th key={i} style={{ padding: "6px 10px", textAlign: i === 3 ? "right" : "left", color: C.muted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {Object.entries(categoryUomSettings).map(([cat, uom]) => (
+                  <tr key={cat} style={{ borderBottom: `1px solid ${C.border}33` }}>
+                    <td style={{ padding: "6px 10px", color: C.text, fontWeight: 600 }}>{cat}</td>
+                    <td style={{ padding: "6px 10px", color: C.purple }}>{uom.onHandUom}</td>
+                    <td style={{ padding: "6px 10px", color: C.accent }}>{uom.orderUom}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right" }}>
+                      <Btn small variant="danger" onClick={() => { const next = { ...categoryUomSettings }; delete next[cat]; setCategoryUomSettings(next); saveCategoryUom(next); }}>✕</Btn>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <Btn variant="ghost" onClick={onBack}>← Back</Btn>
+        <Btn onClick={() => onConfirm(uomMappings, categoryUomSettings, prefixSuffixRules)}>Continue to Review →</Btn>
+      </div>
+    </div>
+  );
+}
+
 // ── STEP 3: Review Order ──────────────────────────────────────────────────────
-function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manualEntry, orderLimits, onConfirm, onBack }) {
+function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manualEntry, orderLimits, uomMappings, categoryUomSettings, prefixSuffixRules, onConfirm, onBack }) {
   const hasCost = !!mapping.cost;
   const hasCategory = !!mapping.category;
   const hasUom = !!mapping.uom;
@@ -915,29 +1243,11 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const [rulesUploadError, setRulesUploadError] = useState("");
   const rulesFileRef = useRef();
 
-  const [uomMappings, setUomMappings] = useState(() => loadUomMappings());
-  const [categoryUomSettings, setCategoryUomSettings] = useState(() => loadCategoryUom());
-  const [prefixSuffixRules, setPrefixSuffixRules] = useState(() => loadPrefixSuffixRules());
-  const savePsRules = (r) => { setPrefixSuffixRules(r); savePrefixSuffixRules(r); };
-  const [newPsMatchType, setNewPsMatchType] = useState("suffix");
-  const [newPsText, setNewPsText] = useState("");
-  const [newPsPackSize, setNewPsPackSize] = useState("");
-  const [newPsOrderMode, setNewPsOrderMode] = useState("pack");
-  const [newUomFrom, setNewUomFrom] = useState("");
-  const [newUomTo, setNewUomTo] = useState("");
-  const [newUomFactor, setNewUomFactor] = useState("");
-  const [newCatKey, setNewCatKey] = useState("");
-  const [newCatOnHandUom, setNewCatOnHandUom] = useState("");
-  const [newCatOrderUom, setNewCatOrderUom] = useState("");
   const [totalRowsIncluded, setTotalRowsIncluded] = useState(() => new Set());
   const [pendingOrders, setPendingOrders] = useState([]);
   const [pendingExpanded, setPendingExpanded] = useState(false);
   const pendingFileRef = useRef();
   const [pendingUploadIdx, setPendingUploadIdx] = useState(0);
-  const [psIgnored, setPsIgnored] = useState(() => {
-    try { return new Set(JSON.parse(localStorage.getItem("ordergen_ps_ignored_v1") || "[]")); } catch { return new Set(); }
-  });
-  const [psDetected, setPsDetected] = useState(null);
 
   const buildRows = (productRules, uomMaps = uomMappings, catUom = categoryUomSettings, psRules = prefixSuffixRules, pendingOrdrs = []) =>
     rawRows.map((r, i) => {
@@ -1291,8 +1601,9 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       return (isNaN(Number(av)) ? String(av ?? "").localeCompare(String(bv ?? "")) : Number(av) - Number(bv)) * sortDir;
     });
 
-  const totalOrder = rows.reduce((s, r) => s + (Number(r.order) || 0), 0);
-  const totalCost = hasCost ? rows.reduce((s, r) => {
+  const nonTotalRows = rows.filter(r => !r._isTotal || totalRowsIncluded.has(r._idx));
+  const totalOrder = nonTotalRows.reduce((s, r) => s + (Number(r.order) || 0), 0);
+  const totalCost = hasCost ? nonTotalRows.reduce((s, r) => {
     const c = parseFloat(r.cost), o = Number(r.order) || 0;
     return s + (isNaN(c) ? 0 : c * o);
   }, 0) : 0;
@@ -1468,7 +1779,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
 
           {/* tab switcher */}
           <div style={{ display: "flex", gap: 0, marginBottom: 14, background: C.surface, borderRadius: 8, padding: 3, width: "fit-content" }}>
-            {[["manual", "✏ Manual Entry"], ["upload", "📂 Upload File"], ["uom", "⚖ UoM Mapping"]].map(([tab, label]) => (
+            {[["manual", "✏ Manual Entry"], ["upload", "📂 Upload File"]].map(([tab, label]) => (
               <button key={tab} onClick={() => { setRulesTab(tab); setRulesUploadPreview(null); setRulesUploadError(""); }}
                 style={{ padding: "6px 16px", borderRadius: 6, fontFamily: "inherit", fontWeight: 700, fontSize: 12, cursor: "pointer", border: "none",
                   background: rulesTab === tab ? C.purple : "transparent",
@@ -1604,310 +1915,6 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                 </div>
               )}
               {rulesUploadError && <p style={{ color: C.red, fontSize: 12, fontWeight: 600, marginTop: 8 }}>{rulesUploadError}</p>}
-            </div>
-          )}
-
-          {/* ── UOM MAPPING TAB ── */}
-          {rulesTab === "uom" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 16, marginBottom: 14 }}>
-              {/* UoM status for current data */}
-              {(() => {
-                const uomPairs = [...new Map(rows.filter(r => r.on_hand_uom || r.order_uom).map(r => {
-                  const k = `${r.on_hand_uom}|${r.order_uom}`;
-                  return [k, { onHand: r.on_hand_uom || "—", order: r.order_uom || "—", hasConversion: r.uomConv?.hasConversion, missing: r.uomConv?.conversionMissing }];
-                })).values()];
-                if (!uomPairs.length) return null;
-                return (
-                  <div style={{ background: C.surface, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
-                    <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 10px" }}>UoM STATUS — CURRENT DATA</p>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      {uomPairs.map((p, i) => {
-                        const isSame = p.onHand === p.order || (!p.order || p.order === "—");
-                        const icon = p.hasConversion ? "✓" : p.missing ? "⚠" : "→";
-                        const color = p.hasConversion ? C.green : p.missing ? C.orange : C.muted;
-                        const desc = p.hasConversion ? `${p.onHand} → ${p.order} (mapped)` : p.missing ? `${p.onHand} → ${p.order} — no mapping found, will use 1:1` : isSame ? `${p.onHand} (same unit, 1:1)` : `${p.onHand} (no order UoM set, 1:1)`;
-                        return (
-                          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 8px", background: C.card, borderRadius: 6, border: `1px solid ${color}33` }}>
-                            <span style={{ color, fontWeight: 700, fontSize: 14, width: 16, textAlign: "center" }}>{icon}</span>
-                            <span style={{ color: C.text, fontSize: 12 }}>{desc}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* Unit conversion definitions */}
-              <div style={{ background: C.surface, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
-                <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 10px" }}>UNIT CONVERSIONS</p>
-                <div style={{ background: C.purple + "11", border: `1px solid ${C.purple}33`, borderRadius: 8, padding: "8px 12px", color: C.purple, fontSize: 12, marginBottom: 12 }}>
-                  Define how on-hand units convert to order units. Example: 1 qt = 0.25 gal (ordering in gallons when stock is tracked in quarts).
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr auto auto", gap: 8, alignItems: "end", marginBottom: 10 }}>
-                  <div>
-                    <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>FROM (ON HAND)</label>
-                    <Input value={newUomFrom} onChange={e => setNewUomFrom(e.target.value)} placeholder="e.g. qt" style={{ width: "100%" }} />
-                  </div>
-                  <span style={{ color: C.muted, fontSize: 13, paddingBottom: 8 }}>→</span>
-                  <div>
-                    <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>TO (ORDER)</label>
-                    <Input value={newUomTo} onChange={e => setNewUomTo(e.target.value)} placeholder="e.g. gal" style={{ width: "100%" }} />
-                  </div>
-                  <div>
-                    <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>FACTOR (1 FROM = ? TO)</label>
-                    <Input type="number" value={newUomFactor} onChange={e => setNewUomFactor(e.target.value)} placeholder="e.g. 0.25" style={{ width: 110 }} />
-                  </div>
-                  <Btn small onClick={() => {
-                    if (!newUomFrom.trim() || !newUomTo.trim() || newUomFactor === "") return;
-                    const next = [...uomMappings.filter(u => !(u.fromUnit === newUomFrom.trim() && u.toUnit === newUomTo.trim())),
-                      { fromUnit: newUomFrom.trim(), toUnit: newUomTo.trim(), factor: Number(newUomFactor) }];
-                    setUomMappings(next); saveUomMappings(next);
-                    applyRulesToRows(productRules, next, categoryUomSettings);
-                    setNewUomFrom(""); setNewUomTo(""); setNewUomFactor("");
-                  }} disabled={!newUomFrom.trim() || !newUomTo.trim() || newUomFactor === ""}>Add</Btn>
-                </div>
-                {uomMappings.length === 0 ? (
-                  <p style={{ color: C.muted, fontSize: 12, textAlign: "center", padding: "8px 0" }}>No conversions defined yet.</p>
-                ) : (
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                    <thead><tr style={{ background: C.card }}>
-                      {["On Hand Unit", "→", "Order Unit", "Factor", "Reverse", ""].map((h, i) => (
-                        <th key={i} style={{ padding: "6px 10px", textAlign: i > 2 ? "right" : "left", color: C.muted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>{h}</th>
-                      ))}
-                    </tr></thead>
-                    <tbody>
-                      {uomMappings.map((u, i) => (
-                        <tr key={i} style={{ borderBottom: `1px solid ${C.border}33` }}>
-                          <td style={{ padding: "6px 10px", color: C.text, fontWeight: 600 }}>{u.fromUnit}</td>
-                          <td style={{ padding: "6px 10px", color: C.muted }}>→</td>
-                          <td style={{ padding: "6px 10px", color: C.text, fontWeight: 600 }}>{u.toUnit}</td>
-                          <td style={{ padding: "6px 10px", color: C.purple, fontWeight: 700, textAlign: "right" }}>{u.factor}</td>
-                          <td style={{ padding: "6px 10px", color: C.muted, textAlign: "right" }}>{u.factor > 0 ? `${(1/u.factor).toFixed(4).replace(/\.?0+$/, "")} ${u.fromUnit}/${u.toUnit}` : "—"}</td>
-                          <td style={{ padding: "6px 10px", textAlign: "right" }}>
-                            <Btn small variant="danger" onClick={() => {
-                              const next = uomMappings.filter((_, j) => j !== i);
-                              setUomMappings(next); saveUomMappings(next);
-                              applyRulesToRows(productRules, next, categoryUomSettings);
-                            }}>✕</Btn>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-
-              {/* Prefix/Suffix pack-size rules */}
-              <div style={{ background: C.surface, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
-                <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 6px" }}>PRODUCT ID PREFIX / SUFFIX RULES</p>
-                <p style={{ color: C.muted, fontSize: 12, margin: "0 0 10px" }}>
-                  Match products by a prefix or suffix in their ID to apply a pack-size conversion. Example: suffix <strong style={{ color: C.accent }}>BB</strong> → 1 BB = 24 on-hand units.
-                </p>
-                {/* Auto-detect patterns */}
-                <div style={{ background: C.card, borderRadius: 8, padding: "10px 12px", marginBottom: 12, border: `1px solid ${C.border}` }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: psDetected !== null ? 10 : 0 }}>
-                    <span style={{ color: C.muted, fontSize: 11, fontWeight: 700, flex: 1 }}>AUTO-DETECT PATTERNS (1–3 letters)</span>
-                    <Btn small variant="ghost" onClick={() => {
-                      const ids = rows.map(r => String(r.product || "").trim()).filter(Boolean);
-                      setPsDetected(detectPrefixSuffixPatterns(ids, psIgnored));
-                    }}>Detect</Btn>
-                    {psDetected !== null && <Btn small variant="ghost" onClick={() => setPsDetected(null)}>Clear</Btn>}
-                  </div>
-                  {psDetected !== null && (psDetected.length === 0 ? (
-                    <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>No significant patterns found in product IDs.</p>
-                  ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 260, overflowY: "auto" }}>
-                      {psDetected.map(p => {
-                        const typeColor = p.type === "prefix" ? C.accent : p.type === "suffix" ? C.purple : C.orange;
-                        const alreadyAdded = p.type !== "both" && prefixSuffixRules.some(r => r.matchType === p.type && r.text === p.text);
-                        return (
-                          <div key={p.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 8px", background: C.surface, borderRadius: 6 }}>
-                            <span style={{ color: typeColor, fontWeight: 700, fontSize: 10, minWidth: 46, letterSpacing: 0.5 }}>{p.type.toUpperCase()}</span>
-                            <span style={{ color: C.text, fontWeight: 700, fontSize: 13, fontFamily: "monospace", minWidth: 44 }}>{p.text}</span>
-                            <span style={{ color: C.muted, fontSize: 11, flex: 1 }}>{p.count} products · e.g. {p.examples.slice(0, 2).join(", ")}</span>
-                            {!alreadyAdded && (
-                              <Btn small variant="ghost" onClick={() => {
-                                const newRules = p.type === "both"
-                                  ? [
-                                      { id: Date.now(), matchType: "prefix", text: p.prefix, purchaseSize: 1, orderMode: "unit" },
-                                      { id: Date.now() + 1, matchType: "suffix", text: p.suffix, purchaseSize: 1, orderMode: "unit" },
-                                    ]
-                                  : [{ id: Date.now(), matchType: p.type, text: p.text, purchaseSize: 1, orderMode: "unit" }];
-                                const next = [...prefixSuffixRules, ...newRules.filter(nr => !prefixSuffixRules.some(r => r.matchType === nr.matchType && r.text === nr.text))];
-                                savePsRules(next); applyRulesToRows(productRules, uomMappings, categoryUomSettings, next);
-                                setPsDetected(prev => prev.filter(x => x.key !== p.key));
-                              }}>Use</Btn>
-                            )}
-                            {alreadyAdded && <span style={{ color: C.green, fontSize: 11 }}>✓ Added</span>}
-                            <Btn small variant="ghost" onClick={() => {
-                              const next = new Set(psIgnored); next.add(p.key);
-                              setPsIgnored(next);
-                              try { localStorage.setItem("ordergen_ps_ignored_v1", JSON.stringify([...next])); } catch {}
-                              setPsDetected(prev => prev.filter(x => x.key !== p.key));
-                            }}>Ignore</Btn>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ))}
-                </div>
-                {/* Add rule form */}
-                <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr auto", gap: 8, alignItems: "end", marginBottom: 10 }}>
-                  <div>
-                    <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>MATCH BY</label>
-                    <div style={{ display: "flex", gap: 3 }}>
-                      {[["suffix", "Suffix"], ["prefix", "Prefix"]].map(([v, l]) => (
-                        <button key={v} onClick={() => setNewPsMatchType(v)} style={{
-                          padding: "5px 10px", borderRadius: 5, fontFamily: "inherit", fontWeight: 700, fontSize: 11, cursor: "pointer",
-                          border: `1px solid ${newPsMatchType === v ? C.purple : C.border}`,
-                          background: newPsMatchType === v ? C.purpleDim : "transparent",
-                          color: newPsMatchType === v ? C.purple : C.muted,
-                        }}>{l}</button>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>{newPsMatchType === "suffix" ? "SUFFIX TEXT" : "PREFIX TEXT"}</label>
-                    <Input value={newPsText} onChange={e => setNewPsText(e.target.value)} placeholder={newPsMatchType === "suffix" ? "e.g. BB" : "e.g. SYN"} style={{ width: "100%" }} />
-                  </div>
-                  <div>
-                    <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>ON-HAND UNITS PER PACK</label>
-                    <Input type="number" value={newPsPackSize} onChange={e => setNewPsPackSize(e.target.value)} placeholder="e.g. 24" style={{ width: "100%" }} />
-                  </div>
-                  <Btn small onClick={() => {
-                    if (!newPsText.trim() || !newPsPackSize) return;
-                    const rule = { id: Date.now(), matchType: newPsMatchType, text: newPsText.trim(), purchaseSize: Number(newPsPackSize), orderMode: newPsOrderMode };
-                    const next = [...prefixSuffixRules.filter(r => !(r.matchType === rule.matchType && r.text === rule.text)), rule];
-                    savePsRules(next);
-                    applyRulesToRows(productRules, uomMappings, categoryUomSettings, next);
-                    setNewPsText(""); setNewPsPackSize("");
-                  }} disabled={!newPsText.trim() || !newPsPackSize}>Add</Btn>
-                </div>
-                {/* Order mode toggle */}
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "8px 12px", background: C.card, borderRadius: 8, border: `1px solid ${C.border}` }}>
-                  <span style={{ color: C.muted, fontSize: 12, fontWeight: 700 }}>ORDER QTY DISPLAY:</span>
-                  {[["pack", "By Pack (÷ pack size)"], ["unit", "By On-Hand Unit (round to pack)"]].map(([v, l]) => (
-                    <button key={v} onClick={() => setNewPsOrderMode(v)} style={{
-                      padding: "4px 12px", borderRadius: 6, fontFamily: "inherit", fontWeight: 700, fontSize: 12, cursor: "pointer",
-                      border: `1px solid ${newPsOrderMode === v ? C.accent : C.border}`,
-                      background: newPsOrderMode === v ? C.accentDim : "transparent",
-                      color: newPsOrderMode === v ? C.accent : C.muted,
-                    }}>{l}</button>
-                  ))}
-                  <span style={{ color: C.muted, fontSize: 11, marginLeft: 4 }}>
-                    {newPsOrderMode === "pack"
-                      ? `Order shows packs — e.g. 2 means 2 × ${newPsPackSize || "N"} = ${newPsPackSize ? 2 * Number(newPsPackSize) : "2N"} on-hand units`
-                      : `Order shows on-hand units, rounded up to nearest ${newPsPackSize || "N"}`}
-                  </span>
-                </div>
-
-                {/* Existing rules table */}
-                {prefixSuffixRules.length === 0 ? (
-                  <p style={{ color: C.muted, fontSize: 12, textAlign: "center", padding: "4px 0" }}>No prefix/suffix rules defined yet.</p>
-                ) : (
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                    <thead><tr style={{ background: C.card }}>
-                      {["Match", "Text", "Pack Size", "Order Mode", ""].map((h, i) => (
-                        <th key={i} style={{ padding: "6px 10px", textAlign: i >= 3 ? "right" : "left", color: C.muted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>{h}</th>
-                      ))}
-                    </tr></thead>
-                    <tbody>
-                      {prefixSuffixRules.map(r => (
-                        <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}33` }}>
-                          <td style={{ padding: "6px 10px", color: C.muted }}>{r.matchType}</td>
-                          <td style={{ padding: "6px 10px", color: C.purple, fontWeight: 700 }}>{r.text}</td>
-                          <td style={{ padding: "6px 10px", color: C.text }}>{r.purchaseSize} on-hand / pack</td>
-                          <td style={{ padding: "6px 10px", color: C.muted, textAlign: "right" }}>
-                            <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
-                              {[["pack", "By Pack"], ["unit", "By Unit"]].map(([v, l]) => (
-                                <button key={v} onClick={() => {
-                                  const next = prefixSuffixRules.map(x => x.id === r.id ? { ...x, orderMode: v } : x);
-                                  savePsRules(next);
-                                  applyRulesToRows(productRules, uomMappings, categoryUomSettings, next);
-                                }} style={{
-                                  padding: "2px 8px", borderRadius: 4, fontFamily: "inherit", fontWeight: 700, fontSize: 10, cursor: "pointer",
-                                  border: `1px solid ${r.orderMode === v ? C.accent : C.border}`,
-                                  background: r.orderMode === v ? C.accentDim : "transparent",
-                                  color: r.orderMode === v ? C.accent : C.muted,
-                                }}>{l}</button>
-                              ))}
-                            </div>
-                          </td>
-                          <td style={{ padding: "6px 10px", textAlign: "right" }}>
-                            <Btn small variant="danger" onClick={() => {
-                              const next = prefixSuffixRules.filter(x => x.id !== r.id);
-                              savePsRules(next);
-                              applyRulesToRows(productRules, uomMappings, categoryUomSettings, next);
-                            }}>✕</Btn>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-
-              {/* Category-level UoM defaults */}
-              {hasCategory && (() => {
-                const availableCategories = [...new Set(rows.map(r => r.category).filter(Boolean))].sort();
-                return (
-                <div style={{ background: C.surface, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
-                  <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 10px" }}>CATEGORY DEFAULTS</p>
-                  <p style={{ color: C.muted, fontSize: 12, margin: "0 0 10px" }}>Set UoM for an entire category. Per-product rules override these.</p>
-                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr auto", gap: 8, alignItems: "end", marginBottom: 10 }}>
-                    <div>
-                      <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>CATEGORY</label>
-                      <datalist id="uom-cat-list">{availableCategories.map(c => <option key={c} value={c} />)}</datalist>
-                      <Input value={newCatKey} onChange={e => setNewCatKey(e.target.value)} placeholder="e.g. Paint" style={{ width: "100%" }} list="uom-cat-list" />
-                    </div>
-                    <div>
-                      <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>ON HAND UOM</label>
-                      <Input value={newCatOnHandUom} onChange={e => setNewCatOnHandUom(e.target.value)} placeholder="e.g. qt" style={{ width: "100%" }} />
-                    </div>
-                    <div>
-                      <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>ORDER UOM</label>
-                      <Input value={newCatOrderUom} onChange={e => setNewCatOrderUom(e.target.value)} placeholder="e.g. gal" style={{ width: "100%" }} />
-                    </div>
-                    <Btn small onClick={() => {
-                      if (!newCatKey.trim() || !newCatOnHandUom.trim() || !newCatOrderUom.trim()) return;
-                      const next = { ...categoryUomSettings, [newCatKey.trim()]: { onHandUom: newCatOnHandUom.trim(), orderUom: newCatOrderUom.trim() } };
-                      setCategoryUomSettings(next); saveCategoryUom(next);
-                      applyRulesToRows(productRules, uomMappings, next);
-                      setNewCatKey(""); setNewCatOnHandUom(""); setNewCatOrderUom("");
-                    }} disabled={!newCatKey.trim() || !newCatOnHandUom.trim() || !newCatOrderUom.trim()}>Save</Btn>
-                  </div>
-                  {Object.keys(categoryUomSettings).length === 0 ? (
-                    <p style={{ color: C.muted, fontSize: 12, textAlign: "center", padding: "4px 0" }}>No category defaults set.</p>
-                  ) : (
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                      <thead><tr style={{ background: C.card }}>
-                        {["Category", "On Hand UoM", "Order UoM", ""].map((h, i) => (
-                          <th key={i} style={{ padding: "6px 10px", textAlign: i === 3 ? "right" : "left", color: C.muted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>{h}</th>
-                        ))}
-                      </tr></thead>
-                      <tbody>
-                        {Object.entries(categoryUomSettings).map(([cat, uom]) => (
-                          <tr key={cat} style={{ borderBottom: `1px solid ${C.border}33` }}>
-                            <td style={{ padding: "6px 10px", color: C.text, fontWeight: 600 }}>{cat}</td>
-                            <td style={{ padding: "6px 10px", color: C.purple }}>{uom.onHandUom}</td>
-                            <td style={{ padding: "6px 10px", color: C.accent }}>{uom.orderUom}</td>
-                            <td style={{ padding: "6px 10px", textAlign: "right" }}>
-                              <Btn small variant="danger" onClick={() => {
-                                const next = { ...categoryUomSettings };
-                                delete next[cat];
-                                setCategoryUomSettings(next); saveCategoryUom(next);
-                                applyRulesToRows(productRules, uomMappings, next);
-                              }}>✕</Btn>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-                );
-              })()}
             </div>
           )}
 
@@ -2272,9 +2279,51 @@ function ExportStep({ rows, onBack }) {
   const [previewSortKey, setPreviewSortKey] = useState(null);
   const [previewSortDir, setPreviewSortDir] = useState(1);
   const [excludeZeros, setExcludeZeros] = useState(false);
-  const [exportFormat, setExportFormat] = useState("xlsx"); // "xlsx" | "csv" | "txt"
+  const [exportFormat, setExportFormat] = useState("xlsx");
+  const [accountInfo, setAccountInfo] = useState(null);
+  const accountInfoFileRef = useRef();
 
-  // Editable local rows — must be declared before any derived values that use it
+  const handleAccountFile = (file) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+        if (json.length < 2) return;
+        const hdrs = json[0].map(h => String(h).trim());
+        const acctRows = json.slice(1).filter(r => r.some(c => String(c).trim() !== ""));
+        const norm = h => h.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const locIdx = hdrs.findIndex(h => ["location","loc","store","site","name","storename","locationname"].includes(norm(h)));
+        setAccountInfo({ headers: hdrs, rows: acctRows, locationColIdx: locIdx >= 0 ? locIdx : 0, fileName: file.name });
+      } catch {}
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const accountLookup = accountInfo ? (() => {
+    const m = new Map();
+    accountInfo.rows.forEach(r => {
+      const loc = String(r[accountInfo.locationColIdx] ?? "").trim().toLowerCase();
+      if (loc) m.set(loc, r);
+    });
+    return m;
+  })() : new Map();
+
+  const resolveCell = (c, r) => {
+    if (c.type === "blank") return "";
+    if (c.type === "constant") return c.value ?? "";
+    if (c.type === "account") {
+      const loc = String(r.location ?? "").trim().toLowerCase();
+      const acctRow = accountLookup.get(loc);
+      if (!acctRow || !accountInfo) return "";
+      const colIdx = accountInfo.headers.indexOf(c.acctCol);
+      return colIdx >= 0 ? String(acctRow[colIdx] ?? "") : "";
+    }
+    return String(r[c.key] ?? "");
+  };
+
+  // Editable local rows
   const [localRows, setLocalRows] = useState(() => rows.map(r => ({ ...r })));
   const updateLocalOrder = (idx, val) => setLocalRows(prev => prev.map(r => r._idx === idx ? { ...r, order: val === "" ? "" : Math.max(0, Number(val)) } : r));
   const updateAllInGroup = (idxList, val) => setLocalRows(prev => prev.map(r => idxList.includes(r._idx) ? { ...r, order: Number(val) } : r));
@@ -2288,25 +2337,30 @@ function ExportStep({ rows, onBack }) {
     else { setPreviewSortKey(id); setPreviewSortDir(1); }
   };
 
-  // Rows that will actually be exported (respects excludeZeros)
   const exportRows = excludeZeros ? localRows.filter(r => (Number(r.order) || 0) > 0) : localRows;
 
   const filteredRows = exportRows.filter(r =>
     cols.every(c => {
-      if (c.type === "blank") return true;
       const fv = (colFilters[c.id] || "").toLowerCase();
-      return !fv || String(r[c.key] ?? "").toLowerCase().includes(fv);
+      return !fv || String(resolveCell(c, r)).toLowerCase().includes(fv);
     })
   ).sort((a, b) => {
     if (!previewSortKey) return 0;
     const col = cols.find(c => c.id === previewSortKey);
-    if (!col || col.type === "blank") return 0;
-    const av = a[col.key], bv = b[col.key];
+    if (!col || col.type === "blank" || col.type === "constant") return 0;
+    const av = col.type === "account" ? resolveCell(col, a) : a[col.key];
+    const bv = col.type === "account" ? resolveCell(col, b) : b[col.key];
     return (isNaN(Number(av)) ? String(av ?? "").localeCompare(String(bv ?? "")) : Number(av) - Number(bv)) * previewSortDir;
   });
 
   const addData = () => { setCols(c => [...c, { id: nextId, type: "data", key: "order", header: "Order Qty" }]); setNextId(n => n + 1); };
   const addBlank = () => { setCols(c => [...c, { id: nextId, type: "blank", header: "Notes" }]); setNextId(n => n + 1); };
+  const addConstant = () => { setCols(c => [...c, { id: nextId, type: "constant", value: "", header: "Custom" }]); setNextId(n => n + 1); };
+  const addAccount = () => {
+    const firstHeader = accountInfo?.headers?.[0] || "";
+    setCols(c => [...c, { id: nextId, type: "account", acctCol: firstHeader, header: firstHeader }]);
+    setNextId(n => n + 1);
+  };
   const remove = (id) => setCols(c => c.filter(col => col.id !== id));
   const update = (id, patch) => setCols(c => c.map(col => col.id === id ? { ...col, ...patch } : col));
   const move = (id, dir) => {
@@ -2320,7 +2374,7 @@ function ExportStep({ rows, onBack }) {
 
   const doExport = () => {
     const hdrs = cols.map(c => c.header || "");
-    const data = exportRows.map(r => cols.map(c => c.type === "blank" ? "" : (r[c.key] ?? "")));
+    const data = exportRows.map(r => cols.map(c => resolveCell(c, r)));
     const baseName = fileName || "order";
 
     if (exportFormat === "xlsx") {
@@ -2553,40 +2607,87 @@ function ExportStep({ rows, onBack }) {
         </div>
       </div>
 
+      {/* account info upload */}
+      <input ref={accountInfoFileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }}
+        onChange={e => { if (e.target.files[0]) { handleAccountFile(e.target.files[0]); e.target.value = ""; } }} />
+      <div style={{ background: C.card, borderRadius: 12, padding: "16px 20px", border: `1px solid ${C.border}` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <span style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>Account Info</span>
+          {!accountInfo ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ color: C.muted, fontSize: 12 }}>Upload a file to match locations to account numbers, store codes, etc.</span>
+              <Btn small variant="ghost" onClick={() => accountInfoFileRef.current?.click()}>Upload Account File</Btn>
+            </div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ color: C.green, fontSize: 12, fontWeight: 700 }}>✓ {accountInfo.fileName}</span>
+              <span style={{ color: C.muted, fontSize: 12 }}>{accountLookup.size} locations matched</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <span style={{ color: C.muted, fontSize: 11 }}>Location col:</span>
+                <Select value={accountInfo.locationColIdx} onChange={e => setAccountInfo(a => ({ ...a, locationColIdx: Number(e.target.value) }))} style={{ fontSize: 11, padding: "3px 6px" }}>
+                  {accountInfo.headers.map((h, i) => <option key={i} value={i}>{h}</option>)}
+                </Select>
+              </div>
+              <Btn small variant="danger" onClick={() => { setAccountInfo(null); setCols(c => c.filter(col => col.type !== "account")); }}>Remove</Btn>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* column builder */}
       <div style={{ background: C.card, borderRadius: 12, padding: "20px 24px", border: `1px solid ${C.border}` }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
           <span style={{ color: C.text, fontWeight: 700 }}>Column Layout</span>
-          <div style={{ display: "flex", gap: 8 }}>
-            <Btn small variant="ghost" onClick={addData}>+ Data Column</Btn>
-            <Btn small variant="ghost" onClick={addBlank}>+ Blank Column</Btn>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <Btn small variant="ghost" onClick={addData}>+ Data</Btn>
+            {accountInfo && <Btn small variant="success" onClick={addAccount}>+ Account</Btn>}
+            <Btn small variant="ghost" onClick={addConstant} style={{ color: C.orange, borderColor: C.orange + "66" }}>+ Constant</Btn>
+            <Btn small variant="ghost" onClick={addBlank}>+ Blank</Btn>
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {cols.map((col, i) => (
-            <div key={col.id} style={{ display: "flex", alignItems: "center", gap: 10, background: C.surface, borderRadius: 8, padding: "10px 14px", border: `1px solid ${col.type === "blank" ? C.border : C.accentDim}` }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <button onClick={() => move(col.id, -1)} disabled={i === 0} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 10, padding: 0 }}>▲</button>
-                <button onClick={() => move(col.id, 1)} disabled={i === cols.length - 1} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 10, padding: 0 }}>▼</button>
-              </div>
-              <Badge color={col.type === "blank" ? C.muted : C.accent}>{col.type === "blank" ? "blank" : "data"}</Badge>
-              <div style={{ flex: 1, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <div style={{ flex: 1, minWidth: 120 }}>
-                  <label style={{ color: C.muted, fontSize: 10, display: "block", marginBottom: 3 }}>COLUMN HEADER</label>
-                  <Input value={col.header} onChange={(e) => update(col.id, { header: e.target.value })} style={{ width: "100%" }} />
+          {cols.map((col, i) => {
+            const badgeColor = col.type === "blank" ? C.muted : col.type === "account" ? C.green : col.type === "constant" ? C.orange : C.accent;
+            const borderColor = col.type === "blank" ? C.border : col.type === "account" ? C.green + "55" : col.type === "constant" ? C.orange + "55" : C.accentDim;
+            return (
+              <div key={col.id} style={{ display: "flex", alignItems: "center", gap: 10, background: C.surface, borderRadius: 8, padding: "10px 14px", border: `1px solid ${borderColor}` }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <button onClick={() => move(col.id, -1)} disabled={i === 0} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 10, padding: 0 }}>▲</button>
+                  <button onClick={() => move(col.id, 1)} disabled={i === cols.length - 1} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 10, padding: 0 }}>▼</button>
                 </div>
-                {col.type === "data" && (
-                  <div style={{ flex: 1, minWidth: 140 }}>
-                    <label style={{ color: C.muted, fontSize: 10, display: "block", marginBottom: 3 }}>DATA SOURCE</label>
-                    <Select value={col.key} onChange={(e) => update(col.id, { key: e.target.value })} style={{ width: "100%" }}>
-                      {STOCK_COLS.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-                    </Select>
+                <Badge color={badgeColor}>{col.type}</Badge>
+                <div style={{ flex: 1, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 120 }}>
+                    <label style={{ color: C.muted, fontSize: 10, display: "block", marginBottom: 3 }}>COLUMN HEADER</label>
+                    <Input value={col.header} onChange={(e) => update(col.id, { header: e.target.value })} style={{ width: "100%" }} />
                   </div>
-                )}
+                  {col.type === "data" && (
+                    <div style={{ flex: 1, minWidth: 140 }}>
+                      <label style={{ color: C.muted, fontSize: 10, display: "block", marginBottom: 3 }}>DATA SOURCE</label>
+                      <Select value={col.key} onChange={(e) => update(col.id, { key: e.target.value })} style={{ width: "100%" }}>
+                        {STOCK_COLS.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+                      </Select>
+                    </div>
+                  )}
+                  {col.type === "account" && accountInfo && (
+                    <div style={{ flex: 1, minWidth: 140 }}>
+                      <label style={{ color: C.muted, fontSize: 10, display: "block", marginBottom: 3 }}>ACCOUNT FIELD</label>
+                      <Select value={col.acctCol} onChange={(e) => update(col.id, { acctCol: e.target.value, header: e.target.value })} style={{ width: "100%" }}>
+                        {accountInfo.headers.map(h => <option key={h} value={h}>{h}</option>)}
+                      </Select>
+                    </div>
+                  )}
+                  {col.type === "constant" && (
+                    <div style={{ flex: 1, minWidth: 140 }}>
+                      <label style={{ color: C.muted, fontSize: 10, display: "block", marginBottom: 3 }}>REPEATING VALUE</label>
+                      <Input value={col.value ?? ""} onChange={(e) => update(col.id, { value: e.target.value })} placeholder="Same value for every row" style={{ width: "100%" }} />
+                    </div>
+                  )}
+                </div>
+                <Btn small variant="danger" onClick={() => remove(col.id)}>✕</Btn>
               </div>
-              <Btn small variant="danger" onClick={() => remove(col.id)}>✕</Btn>
-            </div>
-          ))}
+            );
+          })}
           {cols.length === 0 && <p style={{ color: C.muted, textAlign: "center", padding: "20px 0" }}>No columns yet. Add some above.</p>}
         </div>
       </div>
@@ -2610,10 +2711,10 @@ function ExportStep({ rows, onBack }) {
                 <tr style={{ background: C.card }}>
                   {cols.map(c => (
                     <th key={c.id} style={{ padding: "8px 12px", textAlign: "left", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", background: C.card }}>
-                      <button onClick={() => c.type !== "blank" && toggleSort(c.id)}
-                        style={{ background: "none", border: "none", color: C.accent, cursor: c.type === "blank" ? "default" : "pointer", fontWeight: 700, fontSize: 13, padding: 0, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
+                      <button onClick={() => (c.type !== "blank" && c.type !== "constant") && toggleSort(c.id)}
+                        style={{ background: "none", border: "none", color: C.accent, cursor: (c.type === "blank" || c.type === "constant") ? "default" : "pointer", fontWeight: 700, fontSize: 13, padding: 0, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
                         {c.header || <em style={{ color: C.muted }}>untitled</em>}
-                        {c.type !== "blank" && <span style={{ color: previewSortKey === c.id ? C.accent : C.border, fontSize: 10 }}>{previewSortKey === c.id ? (previewSortDir > 0 ? "▲" : "▼") : "⇅"}</span>}
+                        {(c.type !== "blank" && c.type !== "constant") && <span style={{ color: previewSortKey === c.id ? C.accent : C.border, fontSize: 10 }}>{previewSortKey === c.id ? (previewSortDir > 0 ? "▲" : "▼") : "⇅"}</span>}
                       </button>
                     </th>
                   ))}
@@ -2621,7 +2722,7 @@ function ExportStep({ rows, onBack }) {
                 <tr style={{ background: C.surface }}>
                   {cols.map(c => (
                     <th key={c.id} style={{ padding: "4px 8px", borderBottom: `1px solid ${C.border}`, background: C.surface }}>
-                      {c.type === "blank" ? <div style={{ height: 28 }} /> : (
+                      {(c.type === "blank") ? <div style={{ height: 28 }} /> : (
                         <input value={colFilters[c.id] || ""} onChange={e => setColFilter(c.id, e.target.value)} placeholder="Filter…"
                           style={{ width: "100%", background: C.card, border: `1px solid ${colFilters[c.id] ? C.accent : C.border}`, borderRadius: 4, color: C.text, fontFamily: "inherit", fontSize: 11, padding: "3px 7px", outline: "none", boxSizing: "border-box" }} />
                       )}
@@ -2634,11 +2735,14 @@ function ExportStep({ rows, onBack }) {
                   <tr><td colSpan={cols.length} style={{ padding: "24px", textAlign: "center", color: C.muted }}>No rows match the current filters.</td></tr>
                 ) : filteredRows.map((r, ri) => (
                   <tr key={ri} style={{ borderBottom: `1px solid ${C.border}33`, background: ri % 2 === 0 ? "transparent" : C.surface + "44" }}>
-                    {cols.map(c => (
-                      <td key={c.id} style={{ padding: "7px 12px", color: c.type === "blank" ? C.muted : C.text, whiteSpace: "nowrap" }}>
-                        {c.type === "blank" ? <em style={{ color: C.border }}>—</em> : String(r[c.key] ?? "")}
-                      </td>
-                    ))}
+                    {cols.map(c => {
+                      const val = resolveCell(c, r);
+                      return (
+                        <td key={c.id} style={{ padding: "7px 12px", color: c.type === "blank" ? C.muted : c.type === "constant" ? C.orange : c.type === "account" ? C.green : C.text, whiteSpace: "nowrap" }}>
+                          {c.type === "blank" ? <em style={{ color: C.border }}>—</em> : val || <em style={{ color: C.muted, fontSize: 11 }}>—</em>}
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>
@@ -2678,17 +2782,25 @@ export default function App() {
     setStep(1);
   };
 
+  const [uomMappings, setUomMappings] = useState(() => loadUomMappings());
+  const [categoryUomSettings, setCategoryUomSettings] = useState(() => loadCategoryUom());
+  const [prefixSuffixRules, setPrefixSuffixRules] = useState(() => loadPrefixSuffixRules());
+
   const handleMapConfirm = (m, td, uc, me, ol, ms) => {
     setMapping(m); setTargetDays(td); setUsageConfig(uc);
     setManualEntry(me); setOrderLimits(ol);
-    setSavedMapState(ms); // store full state for if user goes Back
+    setSavedMapState(ms);
     setStep(2);
   };
 
-  // When user goes Back from Review → Map, restore their previous MapStep state
-  const handleReviewBack = () => {
-    setStep(1);
+  const handleUomConfirm = (uomMaps, catUom, psRules) => {
+    setUomMappings(uomMaps);
+    setCategoryUomSettings(catUom);
+    setPrefixSuffixRules(psRules);
+    setStep(3);
   };
+
+  const handleReviewBack = () => { setStep(2); };
 
   const handleNewOrder = () => {
     setStep(0);
@@ -2730,11 +2842,25 @@ export default function App() {
           />
         )}
         {step === 2 && fileData && mapping && usageConfig && (
+          <UomStep
+            rawRows={fileData.rows} headers={fileData.headers} mapping={mapping}
+            usageConfig={usageConfig} manualEntry={manualEntry}
+            hasCategory={!!mapping.category} hasUom={!!mapping.uom}
+            productRules={[]}
+            initialUomMappings={uomMappings}
+            initialCategoryUomSettings={categoryUomSettings}
+            initialPrefixSuffixRules={prefixSuffixRules}
+            onBack={() => setStep(1)}
+            onConfirm={handleUomConfirm}
+          />
+        )}
+        {step === 3 && fileData && mapping && usageConfig && (
           <ReviewStep rawRows={fileData.rows} headers={fileData.headers} mapping={mapping} targetDays={targetDays}
             usageConfig={usageConfig} manualEntry={manualEntry} orderLimits={orderLimits}
-            onConfirm={(rows) => { setFinalRows(rows); setStep(3); }} onBack={handleReviewBack} />
+            uomMappings={uomMappings} categoryUomSettings={categoryUomSettings} prefixSuffixRules={prefixSuffixRules}
+            onConfirm={(rows) => { setFinalRows(rows); setStep(4); }} onBack={handleReviewBack} />
         )}
-        {step === 3 && finalRows && <ExportStep rows={finalRows} onBack={() => setStep(2)} />}
+        {step === 4 && finalRows && <ExportStep rows={finalRows} onBack={() => setStep(3)} />}
       </div>
     </div>
   );
