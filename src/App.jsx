@@ -97,6 +97,14 @@ function savePrefixSuffixRules(r) {
   try { localStorage.setItem(LS_PS_KEY, JSON.stringify(r)); } catch {}
 }
 
+const LS_USAGE_ADJ_KEY = "ordergen_usage_adj_v1";
+function loadUsageAdjustments() {
+  try { return JSON.parse(localStorage.getItem(LS_USAGE_ADJ_KEY) || "null") || { global: null, categories: {}, products: {} }; } catch { return { global: null, categories: {}, products: {} }; }
+}
+function saveUsageAdjustments(a) {
+  try { localStorage.setItem(LS_USAGE_ADJ_KEY, JSON.stringify(a)); } catch {}
+}
+
 const LS_TABLE_PREFS_KEY = "ordergen_table_prefs_v1";
 function loadTablePrefs() {
   try { return JSON.parse(localStorage.getItem(LS_TABLE_PREFS_KEY) || "{}"); } catch { return {}; }
@@ -232,6 +240,10 @@ function getUomConversion(row, productRules, categoryUomSettings, uomMappings, p
     const ps = (prefixSuffixRules || []).find(r => {
       const t = (r.text || "").trim();
       if (!t || !r.purchaseSize) return false;
+      // Check exclusions
+      const excl = r.exclusions || { products: [], categories: [] };
+      if (excl.products?.includes(productId)) return false;
+      if (row.category && excl.categories?.includes(row.category)) return false;
       return r.matchType === "prefix" ? productId.startsWith(t) : productId.endsWith(t);
     });
     if (ps) {
@@ -247,6 +259,14 @@ function getUomConversion(row, productRules, categoryUomSettings, uomMappings, p
   }
 
   return { onHandUom, orderUom, onHandToOrderFactor: 1, orderToOnHandFactor: 1, hasConversion: false };
+}
+
+function getUsageMultiplier(productId, category, adjustments) {
+  if (!adjustments) return 1;
+  if (adjustments.products?.[productId] != null) return 1 + (adjustments.products[productId] / 100);
+  if (category && adjustments.categories?.[category] != null) return 1 + (adjustments.categories[category] / 100);
+  if (adjustments.global != null) return 1 + (adjustments.global / 100);
+  return 1;
 }
 
 // Score a saved mapping against current headers: count matching column values
@@ -611,6 +631,7 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
   const [orderMin, setOrderMin] = useState(init.orderMin ?? "");
   const [orderMax, setOrderMax] = useState(init.orderMax ?? "");
   const [orderLimitType, setOrderLimitType] = useState(init.orderLimitType || "dollars");
+  const [showOrderLimits, setShowOrderLimits] = useState(false);
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
   const showSuggestionBanner = suggestion && !initialState && !suggestionDismissed;
 
@@ -670,7 +691,7 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
     </div>
   );
 
-  const OptionalFieldCard = ({ field, label }) => (
+  const OptionalFieldCard = ({ field, label, description }) => (
     <div style={{ background: C.card, borderRadius: 12, padding: "14px 18px", border: `1px solid ${mapping[field] ? C.accentDim : C.border}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <div>
@@ -683,6 +704,7 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
         <option value="">— Not mapped —</option>
         {headers.map((h, i) => <option key={i} value={h}>{h || `Column ${i + 1}`}</option>)}
       </Select>
+      {description && <p style={{ color: C.muted, fontSize: 11, margin: "6px 0 0", lineHeight: 1.4 }}>{description}</p>}
     </div>
   );
 
@@ -818,57 +840,57 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
       <div>
         <p style={{ color: C.muted, fontSize: 12, fontWeight: 700, marginBottom: 10 }}>OPTIONAL FIELDS</p>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-          <OptionalFieldCard field="category" label="Category" />
-          <OptionalFieldCard field="cost" label="Cost (per unit)" />
-          <OptionalFieldCard field="uom" label="Unit of Measure" />
+          <OptionalFieldCard field="category" label="Category" description="Used for filtering and grouping your order by category." />
+          <OptionalFieldCard field="cost" label="Cost (per unit)" description="Used to calculate total order value and cost-based order limits." />
+          <OptionalFieldCard field="uom" label="Unit of Measure" description="Maps on-hand units to order units (e.g. quarts on hand, order in gallons) for accurate order quantities." />
         </div>
-        {mapping.uom && (
-          <p style={{ color: C.muted, fontSize: 11, marginTop: 8 }}>
-            UoM column provides per-row on-hand units (e.g. "qt", "gal"). Use the <strong style={{ color: C.purple }}>⚖ UoM Mapping</strong> tab in Product Rules to define conversions and set the order unit.
-          </p>
-        )}
       </div>
 
       {/* order min/max */}
-      <div style={{ background: C.card, borderRadius: 12, padding: "18px 20px", border: `1px solid ${C.border}` }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
-          <div>
-            <span style={{ color: C.text, fontWeight: 700 }}>Order Limits</span>
-            <span style={{ color: C.accent, fontWeight: 700, fontSize: 12, marginLeft: 6 }}>{orderLimitType === "dollars" ? "Value ($)" : "Units"}</span>
-            <span style={{ color: C.muted, fontSize: 12, marginLeft: 4 }}>— total order, flags outside range in review</span>
+      <div style={{ background: C.card, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+        <button onClick={() => setShowOrderLimits(v => !v)}
+          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ color: C.text, fontWeight: 700 }}>{showOrderLimits ? "▼" : "▶"} Order Limits</span>
+            <span style={{ color: C.muted, fontSize: 12 }}>optional — flags orders outside range in review</span>
           </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {[["dollars", "Total $ Value"], ["units", "Total Units"]].map(([val, label]) => (
-              <button key={val} onClick={() => setOrderLimitType(val)} style={{
-                padding: "4px 12px", borderRadius: 6, fontFamily: "inherit", fontWeight: 700, fontSize: 12, cursor: "pointer",
-                border: `1px solid ${orderLimitType === val ? C.accent : C.border}`,
-                background: orderLimitType === val ? C.accentDim : "transparent",
-                color: orderLimitType === val ? C.accent : C.muted,
-              }}>{label}</button>
-            ))}
-          </div>
-        </div>
-        {orderLimitType === "dollars" && !mapping.cost && (
-          <div style={{ background: C.orange + "18", border: `1px solid ${C.orange}44`, borderRadius: 8, padding: "8px 12px", color: C.orange, fontSize: 12, marginBottom: 12 }}>
-            ⚠ Map a Cost column above to enable dollar-based limits.
+          {(orderMin !== "" || orderMax !== "") && <Badge color={C.accent}>set</Badge>}
+        </button>
+        {showOrderLimits && (
+          <div style={{ padding: "0 20px 18px" }}>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginBottom: 14 }}>
+              {[["dollars", "Total $ Value"], ["units", "Total Units"]].map(([val, label]) => (
+                <button key={val} onClick={() => setOrderLimitType(val)} style={{
+                  padding: "4px 12px", borderRadius: 6, fontFamily: "inherit", fontWeight: 700, fontSize: 12, cursor: "pointer",
+                  border: `1px solid ${orderLimitType === val ? C.accent : C.border}`,
+                  background: orderLimitType === val ? C.accentDim : "transparent",
+                  color: orderLimitType === val ? C.accent : C.muted,
+                }}>{label}</button>
+              ))}
+            </div>
+            {orderLimitType === "dollars" && !mapping.cost && (
+              <div style={{ background: C.orange + "18", border: `1px solid ${C.orange}44`, borderRadius: 8, padding: "8px 12px", color: C.orange, fontSize: 12, marginBottom: 12 }}>
+                ⚠ Map a Cost column above to enable dollar-based limits.
+              </div>
+            )}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div>
+                <label style={{ color: C.muted, fontSize: 11, fontWeight: 700, display: "block", marginBottom: 5 }}>
+                  {orderLimitType === "dollars" ? "MINIMUM ORDER VALUE ($)" : "MINIMUM ORDER UNITS"}
+                </label>
+                <Input type="number" value={orderMin} onChange={e => setOrderMin(e.target.value)}
+                  placeholder={orderLimitType === "dollars" ? "e.g. 500" : "e.g. 12"} style={{ width: "100%" }} />
+              </div>
+              <div>
+                <label style={{ color: C.muted, fontSize: 11, fontWeight: 700, display: "block", marginBottom: 5 }}>
+                  {orderLimitType === "dollars" ? "MAXIMUM ORDER VALUE ($)" : "MAXIMUM ORDER UNITS"}
+                </label>
+                <Input type="number" value={orderMax} onChange={e => setOrderMax(e.target.value)}
+                  placeholder={orderLimitType === "dollars" ? "e.g. 5000" : "e.g. 144"} style={{ width: "100%" }} />
+              </div>
+            </div>
           </div>
         )}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div>
-            <label style={{ color: C.muted, fontSize: 11, fontWeight: 700, display: "block", marginBottom: 5 }}>
-              {orderLimitType === "dollars" ? "MINIMUM ORDER VALUE ($)" : "MINIMUM ORDER UNITS"}
-            </label>
-            <Input type="number" value={orderMin} onChange={e => setOrderMin(e.target.value)}
-              placeholder={orderLimitType === "dollars" ? "e.g. 500" : "e.g. 12"} style={{ width: "100%" }} />
-          </div>
-          <div>
-            <label style={{ color: C.muted, fontSize: 11, fontWeight: 700, display: "block", marginBottom: 5 }}>
-              {orderLimitType === "dollars" ? "MAXIMUM ORDER VALUE ($)" : "MAXIMUM ORDER UNITS"}
-            </label>
-            <Input type="number" value={orderMax} onChange={e => setOrderMax(e.target.value)}
-              placeholder={orderLimitType === "dollars" ? "e.g. 5000" : "e.g. 144"} style={{ width: "100%" }} />
-          </div>
-        </div>
       </div>
 
       {/* target days */}
@@ -912,6 +934,9 @@ function UomStep({ rawRows, headers, mapping, usageConfig, manualEntry, hasCateg
   const [newCatKey, setNewCatKey] = useState("");
   const [newCatOnHandUom, setNewCatOnHandUom] = useState("");
   const [newCatOrderUom, setNewCatOrderUom] = useState("");
+  const [psExclPopup, setPsExclPopup] = useState(null);
+  const [newExclProd, setNewExclProd] = useState("");
+  const [newExclCat, setNewExclCat] = useState("");
 
   const savePsRulesLocal = (r) => { setPrefixSuffixRules(r); savePrefixSuffixRules(r); };
 
@@ -1132,8 +1157,8 @@ function UomStep({ rawRows, headers, mapping, usageConfig, manualEntry, hasCateg
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead><tr style={{ background: C.card }}>
-              {["Match", "Text", "Pack Size", "Order Mode", ""].map((h, i) => (
-                <th key={i} style={{ padding: "6px 10px", textAlign: i >= 3 ? "right" : "left", color: C.muted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+              {["Match", "Text", "Pack Size", "Exclusions", "Order Mode", ""].map((h, i) => (
+                <th key={i} style={{ padding: "6px 10px", textAlign: i >= 4 ? "right" : "left", color: C.muted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>{h}</th>
               ))}
             </tr></thead>
             <tbody>
@@ -1142,6 +1167,21 @@ function UomStep({ rawRows, headers, mapping, usageConfig, manualEntry, hasCateg
                   <td style={{ padding: "6px 10px", color: C.muted }}>{r.matchType}</td>
                   <td style={{ padding: "6px 10px", color: C.purple, fontWeight: 700 }}>{r.text}</td>
                   <td style={{ padding: "6px 10px", color: C.text }}>{r.purchaseSize} on-hand / pack</td>
+                  <td style={{ padding: "6px 10px" }}>
+                    {(() => {
+                      const excl = r.exclusions || { products: [], categories: [] };
+                      const total = (excl.products?.length || 0) + (excl.categories?.length || 0);
+                      return (
+                        <button onClick={() => setPsExclPopup(r.id)}
+                          style={{ padding: "3px 10px", borderRadius: 5, fontFamily: "inherit", fontWeight: 700, fontSize: 11, cursor: "pointer",
+                            border: `1px solid ${total > 0 ? C.orange : C.border}`,
+                            background: total > 0 ? C.orange + "22" : "transparent",
+                            color: total > 0 ? C.orange : C.muted }}>
+                          {total > 0 ? `${total} excluded` : "Exclude"}
+                        </button>
+                      );
+                    })()}
+                  </td>
                   <td style={{ padding: "6px 10px", color: C.muted, textAlign: "right" }}>
                     <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
                       {[["pack", "By Pack"], ["unit", "By Unit"]].map(([v, l]) => (
@@ -1159,6 +1199,86 @@ function UomStep({ rawRows, headers, mapping, usageConfig, manualEntry, hasCateg
           </table>
         )}
       </div>
+
+      {/* Exclusion popup */}
+      {psExclPopup !== null && (() => {
+        const rule = prefixSuffixRules.find(r => r.id === psExclPopup);
+        if (!rule) return null;
+        const excl = rule.exclusions || { products: [], categories: [] };
+        const matchedIds = allProductIds.filter(id => rule.matchType === "prefix" ? id.toUpperCase().startsWith(rule.text.toUpperCase()) : id.toUpperCase().endsWith(rule.text.toUpperCase()));
+        const excludedFromRule = matchedIds.filter(id => excl.products?.includes(id));
+        const updateExcl = (next) => {
+          savePsRulesLocal(prefixSuffixRules.map(r => r.id === psExclPopup ? { ...r, exclusions: next } : r));
+        };
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "#0008", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}
+            onClick={e => { if (e.target === e.currentTarget) setPsExclPopup(null); }}>
+            <div style={{ background: C.card, borderRadius: 14, border: `1px solid ${C.orange}66`, padding: 24, width: 480, maxWidth: "95vw", maxHeight: "80vh", overflowY: "auto", boxShadow: "0 16px 48px #0006" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <div>
+                  <span style={{ color: C.text, fontWeight: 800, fontSize: 15 }}>Exclusions — {rule.matchType} <span style={{ color: C.purple }}>{rule.text}</span></span>
+                  <div style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>{matchedIds.length} products match this rule · {excludedFromRule.length} excluded</div>
+                </div>
+                <button onClick={() => setPsExclPopup(null)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 18 }}>✕</button>
+              </div>
+              {/* Exclude by product */}
+              <div style={{ marginBottom: 14 }}>
+                <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 8px" }}>EXCLUDE BY PRODUCT</p>
+                <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                  <datalist id="excl-prod-list">{matchedIds.map(id => <option key={id} value={id} />)}</datalist>
+                  <Input value={newExclProd} onChange={e => setNewExclProd(e.target.value)} placeholder="Product ID" list="excl-prod-list" style={{ flex: 1 }} />
+                  <Btn small onClick={() => {
+                    if (!newExclProd.trim() || excl.products?.includes(newExclProd.trim())) return;
+                    updateExcl({ ...excl, products: [...(excl.products || []), newExclProd.trim()] });
+                    setNewExclProd("");
+                  }} disabled={!newExclProd.trim()}>Add</Btn>
+                </div>
+                {(excl.products || []).length === 0 ? (
+                  <p style={{ color: C.muted, fontSize: 12, textAlign: "center", padding: "6px 0" }}>No products excluded.</p>
+                ) : (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                    {(excl.products || []).map(prod => (
+                      <div key={prod} style={{ display: "flex", alignItems: "center", gap: 5, padding: "2px 8px", background: C.surface, borderRadius: 8, border: `1px solid ${C.orange}44` }}>
+                        <span style={{ color: C.text, fontSize: 12 }}>{prod}</span>
+                        <button onClick={() => updateExcl({ ...excl, products: excl.products.filter(p => p !== prod) })}
+                          style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, padding: 0 }}>✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {/* Exclude by category */}
+              {availableCategories.length > 0 && (
+                <div>
+                  <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 8px" }}>EXCLUDE BY CATEGORY</p>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                    <datalist id="excl-cat-list">{availableCategories.map(c => <option key={c} value={c} />)}</datalist>
+                    <Input value={newExclCat} onChange={e => setNewExclCat(e.target.value)} placeholder="Category name" list="excl-cat-list" style={{ flex: 1 }} />
+                    <Btn small onClick={() => {
+                      if (!newExclCat.trim() || excl.categories?.includes(newExclCat.trim())) return;
+                      updateExcl({ ...excl, categories: [...(excl.categories || []), newExclCat.trim()] });
+                      setNewExclCat("");
+                    }} disabled={!newExclCat.trim()}>Add</Btn>
+                  </div>
+                  {(excl.categories || []).length === 0 ? (
+                    <p style={{ color: C.muted, fontSize: 12, textAlign: "center", padding: "6px 0" }}>No categories excluded.</p>
+                  ) : (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                      {(excl.categories || []).map(cat => (
+                        <div key={cat} style={{ display: "flex", alignItems: "center", gap: 5, padding: "2px 8px", background: C.surface, borderRadius: 8, border: `1px solid ${C.orange}44` }}>
+                          <span style={{ color: C.text, fontSize: 12 }}>{cat}</span>
+                          <button onClick={() => updateExcl({ ...excl, categories: excl.categories.filter(c => c !== cat) })}
+                            style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, padding: 0 }}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {hasCategory && availableCategories.length > 0 && (
         <div style={{ background: C.surface, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
@@ -1264,6 +1384,12 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
         const raw = salesIdx >= 0 ? parseFloat(r[salesIdx]) : NaN;
         daily_usage = isNaN(raw) ? "" : raw / usageConfig.salesDays;
       }
+      const _rawUsage = daily_usage;
+      // Apply usage adjustment multiplier
+      const _adjMult = getUsageMultiplier(get("product"), hasCategory ? get("category") : "", usageAdj);
+      if (!isNaN(parseFloat(daily_usage)) && _adjMult !== 1) {
+        daily_usage = parseFloat(daily_usage) * _adjMult;
+      }
       const row = {
         _idx: i,
         location: get("location"), product: get("product"),
@@ -1288,9 +1414,10 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       }
       const safeOrder = Math.max(0, finalOrder);
       const est_on_hand_after = !_isTotal && !isNaN(onHandNum) ? onHandNum + pendingQtyTotal + safeOrder * uomConv.orderToOnHandFactor : null;
+      const units_ordered = !_isTotal && !isNaN(safeOrder) ? Math.round(safeOrder * (uomConv.orderToOnHandFactor ?? 1)) : null;
       const pendingQtys = {};
       pendingOrdrs.forEach(po => { pendingQtys[`pending_${po.id}`] = po._index?.get(pendingKey) ?? 0; });
-      return { ...row, suggested, order: safeOrder, days_on_hand, est_on_hand_after, appliedRule: rule || null, uomConv, _isTotal, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "", ...pendingQtys };
+      return { ...row, suggested, order: safeOrder, days_on_hand, est_on_hand_after, appliedRule: rule || null, uomConv, _isTotal, _rawUsage, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "", units_ordered, ...pendingQtys };
     });
 
   const [rows, setRows] = useState(() => buildRows(productRules, uomMappings, categoryUomSettings, prefixSuffixRules));
@@ -1302,6 +1429,14 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState(1);
   const [hideZero, setHideZero] = useState(false);
+  const [usageAdj, setUsageAdj] = useState(() => loadUsageAdjustments());
+  const [adjExpanded, setAdjExpanded] = useState(false);
+  const [newAdjGlobal, setNewAdjGlobal] = useState("");
+  const [newAdjCat, setNewAdjCat] = useState("");
+  const [newAdjCatPct, setNewAdjCatPct] = useState("");
+  const [newAdjProd, setNewAdjProd] = useState("");
+  const [newAdjProdPct, setNewAdjProdPct] = useState("");
+  const saveAdj = (a) => { setUsageAdj(a); saveUsageAdjustments(a); };
 
   const applyPackRounding = (finalOrder, rule, uomConv) => {
     if (uomConv.isPack && uomConv.packSize > 1 && !uomConv.hasConversion && (!rule || rule.caseSize == null) && finalOrder > 0) {
@@ -1310,27 +1445,33 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
     return finalOrder;
   };
 
-  const recalc = (td, rulesOverride, uomOverride, catUomOverride, psOverride, pendingOverride) => {
+  const recalc = (td, rulesOverride, uomOverride, catUomOverride, psOverride, pendingOverride, adjOverride) => {
     const rules = rulesOverride ?? productRules;
     const uomMaps = uomOverride ?? uomMappings;
     const catUom = catUomOverride ?? categoryUomSettings;
     const psRules = psOverride ?? prefixSuffixRules;
     const poList = pendingOverride ?? pendingOrders;
+    const adj = adjOverride ?? usageAdj;
     setRows(prev => prev.map(r => {
       const pendingKey = `${String(r.location || "").trim()}|${String(r.product || "").trim()}`.toLowerCase();
       const pendingQtyTotal = poList.reduce((s, po) => s + (po._index?.get(pendingKey) ?? 0), 0);
       const uomConv = getUomConversion(r, rules, catUom, uomMaps, psRules);
       const onHandNum = parseFloat(r.on_hand);
       const effectiveOnHand = isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal;
-      const s = r._isTotal ? null : calcOrder(r, td, uomConv.onHandToOrderFactor, effectiveOnHand);
+      const adjMult = getUsageMultiplier(r.product, r.category, adj);
+      const effectiveDailyUsage = isNaN(parseFloat(r._rawUsage ?? r.daily_usage)) ? r.daily_usage : parseFloat(r._rawUsage ?? r.daily_usage) * adjMult;
+      const adjRow = { ...r, daily_usage: effectiveDailyUsage };
+      const s = r._isTotal ? null : calcOrder(adjRow, td, uomConv.onHandToOrderFactor, effectiveOnHand);
       const rule = rules.find(ru => String(ru.productId).trim() === String(r.product ?? "").trim());
       let finalOrder = rule ? applyProductRule(rule, s ?? 0, effectiveOnHand) : (s ?? 0);
       finalOrder = applyPackRounding(finalOrder, rule, uomConv);
       const safeOrder = Math.max(0, finalOrder);
       const est_on_hand_after = r._isTotal || isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal + safeOrder * uomConv.orderToOnHandFactor;
+      const days_on_hand = calcDaysOnHand(adjRow);
+      const units_ordered = r._isTotal || isNaN(safeOrder) ? null : Math.round(safeOrder * (uomConv.orderToOnHandFactor ?? 1));
       const pendingQtys = {};
       poList.forEach(po => { pendingQtys[`pending_${po.id}`] = po._index?.get(pendingKey) ?? 0; });
-      return { ...r, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, uomConv, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "", ...pendingQtys };
+      return { ...r, daily_usage: effectiveDailyUsage, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, days_on_hand, uomConv, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "", units_ordered, ...pendingQtys };
     }));
     setTargetLocal(td);
   };
@@ -1346,15 +1487,20 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       const uomConv = getUomConversion(r, rules, catUom, uomMaps, psRules);
       const onHandNum = parseFloat(r.on_hand);
       const effectiveOnHand = isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal;
-      const s = r._isTotal ? null : calcOrder(r, targetLocal, uomConv.onHandToOrderFactor, effectiveOnHand);
+      const adjMult = getUsageMultiplier(r.product, r.category, usageAdj);
+      const effectiveDailyUsage = isNaN(parseFloat(r._rawUsage ?? r.daily_usage)) ? r.daily_usage : parseFloat(r._rawUsage ?? r.daily_usage) * adjMult;
+      const adjRow = { ...r, daily_usage: effectiveDailyUsage };
+      const s = r._isTotal ? null : calcOrder(adjRow, targetLocal, uomConv.onHandToOrderFactor, effectiveOnHand);
       const rule = rules.find(ru => String(ru.productId).trim() === String(r.product ?? "").trim());
       let finalOrder = rule ? applyProductRule(rule, s ?? 0, effectiveOnHand) : (s ?? 0);
       finalOrder = applyPackRounding(finalOrder, rule, uomConv);
       const safeOrder = Math.max(0, finalOrder);
       const est_on_hand_after = r._isTotal || isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal + safeOrder * uomConv.orderToOnHandFactor;
+      const days_on_hand = calcDaysOnHand(adjRow);
+      const units_ordered = r._isTotal || isNaN(safeOrder) ? null : Math.round(safeOrder * (uomConv.orderToOnHandFactor ?? 1));
       const pendingQtys = {};
       poList.forEach(po => { pendingQtys[`pending_${po.id}`] = po._index?.get(pendingKey) ?? 0; });
-      return { ...r, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, uomConv, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "", ...pendingQtys };
+      return { ...r, daily_usage: effectiveDailyUsage, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, days_on_hand, uomConv, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "", units_ordered, ...pendingQtys };
     }));
   };
   const setOrder = (idx, val) => setRows(prev => prev.map(r => {
@@ -1382,7 +1528,10 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       const onHandNum = parseFloat(r.on_hand);
       const effectiveOnHand = isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal;
       const uomConv = r.uomConv ?? { onHandToOrderFactor: 1, orderToOnHandFactor: 1 };
-      const s = r._isTotal ? null : calcOrder(r, targetLocal, uomConv.onHandToOrderFactor ?? 1, effectiveOnHand);
+      const adjMult = getUsageMultiplier(r.product, r.category, usageAdj);
+      const effectiveDailyUsage = isNaN(parseFloat(r._rawUsage ?? r.daily_usage)) ? r.daily_usage : parseFloat(r._rawUsage ?? r.daily_usage) * adjMult;
+      const adjRow = { ...r, daily_usage: effectiveDailyUsage };
+      const s = r._isTotal ? null : calcOrder(adjRow, targetLocal, uomConv.onHandToOrderFactor ?? 1, effectiveOnHand);
       const rule = r.appliedRule;
       const wasEdited = r.order !== r.suggested;
       let newOrder;
@@ -1394,9 +1543,10 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
         newOrder = Math.max(0, fo);
       }
       const est_on_hand_after = r._isTotal || isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal + newOrder * (uomConv.orderToOnHandFactor ?? 1);
+      const units_ordered = r._isTotal || isNaN(newOrder) ? null : Math.round(newOrder * (uomConv.orderToOnHandFactor ?? 1));
       const pendingQtys = {};
       poList.forEach(po => { pendingQtys[`pending_${po.id}`] = po._index?.get(pendingKey) ?? 0; });
-      return { ...r, suggested: s, order: newOrder, est_on_hand_after, ...pendingQtys };
+      return { ...r, daily_usage: effectiveDailyUsage, suggested: s, order: newOrder, est_on_hand_after, units_ordered, ...pendingQtys };
     }));
   };
 
@@ -1464,6 +1614,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
     })),
     { key: "order", label: "Order Qty", defaultWidth: 110, noFilter: true },
     { key: "order_uom", label: "Order UoM", defaultWidth: 100 },
+    { key: "units_ordered", label: "Units Ordered", defaultWidth: 110, noFilter: true, noSort: true },
     ...(hasCost ? [{ key: "ext_cost", label: "Ext. Cost", defaultWidth: 100, noFilter: true, noSort: true }] : []),
   ];
 
@@ -1558,6 +1709,13 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
           style={{ width: "100%", textAlign: "right", borderColor: edited ? C.orange : C.border }} />
       );
       case "order_uom": return <span style={{ color: C.muted, fontSize: 12 }}>{r.order_uom || "—"}</span>;
+      case "units_ordered": {
+        const uo = r.units_ordered;
+        if (uo === null || uo === undefined || uo === 0) return <span style={{ color: C.muted }}>—</span>;
+        const factor = r.uomConv?.orderToOnHandFactor ?? 1;
+        if (Math.abs(factor - 1) < 0.0001) return <span style={{ color: C.muted }}>—</span>;
+        return <span style={{ color: C.muted, fontSize: 12 }}>{fmtNum(uo, 0)}</span>;
+      }
       case "ext_cost": {
         const extCost = !isNaN(parseFloat(r.cost)) ? parseFloat(r.cost) * (Number(r.order) || 0) : null;
         return <span style={{ color: C.muted, fontSize: 12 }}>{extCost !== null ? fmtCurrency(extCost) : "—"}</span>;
@@ -2102,6 +2260,131 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                 </div>
               );
             })}
+          </div>
+        )}
+      </div>
+
+      {/* usage adjustment panel */}
+      <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+        <button onClick={() => setAdjExpanded(x => !x)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit" }}>
+          <span style={{ color: C.text, fontWeight: 700, fontSize: 13 }}>
+            📈 Usage Adjustment
+            {(usageAdj.global != null || Object.keys(usageAdj.categories).length > 0 || Object.keys(usageAdj.products).length > 0) && (
+              <span style={{ marginLeft: 8, color: C.orange, fontSize: 12 }}>
+                ({[
+                  usageAdj.global != null ? `${usageAdj.global > 0 ? "+" : ""}${usageAdj.global}% global` : null,
+                  Object.keys(usageAdj.categories).length > 0 ? `${Object.keys(usageAdj.categories).length} category` : null,
+                  Object.keys(usageAdj.products).length > 0 ? `${Object.keys(usageAdj.products).length} product` : null,
+                ].filter(Boolean).join(", ")} override{Object.keys(usageAdj.categories).length + Object.keys(usageAdj.products).length + (usageAdj.global != null ? 1 : 0) > 1 ? "s" : ""})
+              </span>
+            )}
+          </span>
+          <span style={{ color: C.muted, fontSize: 12 }}>{adjExpanded ? "▲" : "▼"}</span>
+        </button>
+        {adjExpanded && (
+          <div style={{ padding: "0 16px 16px", borderTop: `1px solid ${C.border}`, display: "flex", flexDirection: "column", gap: 14 }}>
+            <p style={{ color: C.muted, fontSize: 12, margin: "10px 0 0" }}>Adjust daily usage up or down by a % to ramp orders up or down. Product overrides take priority over category, which takes priority over global.</p>
+
+            {/* Global adjustment */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ color: C.muted, fontSize: 12, fontWeight: 700, minWidth: 100 }}>GLOBAL</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <Input type="number" value={newAdjGlobal} onChange={e => setNewAdjGlobal(e.target.value)} placeholder="e.g. 10 or -15" style={{ width: 110 }} />
+                <span style={{ color: C.muted, fontSize: 13 }}>%</span>
+                <Btn small onClick={() => {
+                  const pct = parseFloat(newAdjGlobal);
+                  if (isNaN(pct)) return;
+                  const next = { ...usageAdj, global: pct };
+                  saveAdj(next); recalc(targetLocal, undefined, undefined, undefined, undefined, undefined, next);
+                  setNewAdjGlobal("");
+                }} disabled={newAdjGlobal === ""}>Apply</Btn>
+                {usageAdj.global != null && (
+                  <span style={{ color: C.orange, fontWeight: 700, fontSize: 13 }}>Current: {usageAdj.global > 0 ? "+" : ""}{usageAdj.global}%</span>
+                )}
+                {usageAdj.global != null && (
+                  <Btn small variant="ghost" onClick={() => {
+                    const next = { ...usageAdj, global: null };
+                    saveAdj(next); recalc(targetLocal, undefined, undefined, undefined, undefined, undefined, next);
+                  }}>Remove</Btn>
+                )}
+              </div>
+            </div>
+
+            {/* Category adjustment */}
+            {hasCategory && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <span style={{ color: C.muted, fontSize: 12, fontWeight: 700 }}>BY CATEGORY</span>
+                <div style={{ display: "flex", gap: 8, alignItems: "end", flexWrap: "wrap" }}>
+                  <div>
+                    <datalist id="adj-cat-list">{[...new Set(rows.map(r => r.category).filter(Boolean))].sort().map(c => <option key={c} value={c} />)}</datalist>
+                    <Input value={newAdjCat} onChange={e => setNewAdjCat(e.target.value)} placeholder="Category name" list="adj-cat-list" style={{ width: 160 }} />
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    <Input type="number" value={newAdjCatPct} onChange={e => setNewAdjCatPct(e.target.value)} placeholder="e.g. 20" style={{ width: 90 }} />
+                    <span style={{ color: C.muted, fontSize: 13 }}>%</span>
+                  </div>
+                  <Btn small onClick={() => {
+                    const pct = parseFloat(newAdjCatPct);
+                    if (!newAdjCat.trim() || isNaN(pct)) return;
+                    const next = { ...usageAdj, categories: { ...usageAdj.categories, [newAdjCat.trim()]: pct } };
+                    saveAdj(next); recalc(targetLocal, undefined, undefined, undefined, undefined, undefined, next);
+                    setNewAdjCat(""); setNewAdjCatPct("");
+                  }} disabled={!newAdjCat.trim() || newAdjCatPct === ""}>Add</Btn>
+                </div>
+                {Object.keys(usageAdj.categories).length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {Object.entries(usageAdj.categories).map(([cat, pct]) => (
+                      <div key={cat} style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 10px", background: C.card, borderRadius: 8, border: `1px solid ${C.orange}55` }}>
+                        <span style={{ color: C.text, fontSize: 12 }}>{cat}</span>
+                        <span style={{ color: C.orange, fontWeight: 700, fontSize: 12 }}>{pct > 0 ? "+" : ""}{pct}%</span>
+                        <button onClick={() => {
+                          const next = { ...usageAdj, categories: { ...usageAdj.categories } };
+                          delete next.categories[cat];
+                          saveAdj(next); recalc(targetLocal, undefined, undefined, undefined, undefined, undefined, next);
+                        }} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, padding: 0 }}>✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Product adjustment */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <span style={{ color: C.muted, fontSize: 12, fontWeight: 700 }}>BY PRODUCT</span>
+              <div style={{ display: "flex", gap: 8, alignItems: "end", flexWrap: "wrap" }}>
+                <div>
+                  <datalist id="adj-prod-list">{[...new Set(rows.map(r => r.product).filter(Boolean))].sort().map(p => <option key={p} value={p} />)}</datalist>
+                  <Input value={newAdjProd} onChange={e => setNewAdjProd(e.target.value)} placeholder="Product ID" list="adj-prod-list" style={{ width: 160 }} />
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  <Input type="number" value={newAdjProdPct} onChange={e => setNewAdjProdPct(e.target.value)} placeholder="e.g. -10" style={{ width: 90 }} />
+                  <span style={{ color: C.muted, fontSize: 13 }}>%</span>
+                </div>
+                <Btn small onClick={() => {
+                  const pct = parseFloat(newAdjProdPct);
+                  if (!newAdjProd.trim() || isNaN(pct)) return;
+                  const next = { ...usageAdj, products: { ...usageAdj.products, [newAdjProd.trim()]: pct } };
+                  saveAdj(next); recalc(targetLocal, undefined, undefined, undefined, undefined, undefined, next);
+                  setNewAdjProd(""); setNewAdjProdPct("");
+                }} disabled={!newAdjProd.trim() || newAdjProdPct === ""}>Add</Btn>
+              </div>
+              {Object.keys(usageAdj.products).length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {Object.entries(usageAdj.products).map(([prod, pct]) => (
+                    <div key={prod} style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 10px", background: C.card, borderRadius: 8, border: `1px solid ${C.orange}55` }}>
+                      <span style={{ color: C.text, fontSize: 12 }}>{prod}</span>
+                      <span style={{ color: C.orange, fontWeight: 700, fontSize: 12 }}>{pct > 0 ? "+" : ""}{pct}%</span>
+                      <button onClick={() => {
+                        const next = { ...usageAdj, products: { ...usageAdj.products } };
+                        delete next.products[prod];
+                        saveAdj(next); recalc(targetLocal, undefined, undefined, undefined, undefined, undefined, next);
+                      }} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, padding: 0 }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
