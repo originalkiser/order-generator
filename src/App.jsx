@@ -657,7 +657,7 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
     mapping.on_hand,
     fieldMode.leadtime === "column" ? mapping.leadtime : null,
     usageMode === "direct" ? mapping.daily_usage : salesCol,
-    mapping.category, mapping.cost, mapping.uom,
+    mapping.category, mapping.cost, mapping.uom, mapping.min_on_hand, mapping.max_on_hand,
   ].filter(Boolean);
 
   const currentMapState = () => ({
@@ -843,6 +843,8 @@ function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion 
           <OptionalFieldCard field="category" label="Category" description="Used for filtering and grouping your order by category." />
           <OptionalFieldCard field="cost" label="Cost (per unit)" description="Used to calculate total order value and cost-based order limits." />
           <OptionalFieldCard field="uom" label="Unit of Measure" description="Maps on-hand units to order units (e.g. quarts on hand, order in gallons) for accurate order quantities." />
+          <OptionalFieldCard field="min_on_hand" label="Min On Hand" description="Floor for on-hand quantity after delivery. The order will be raised to ensure this minimum is met." />
+          <OptionalFieldCard field="max_on_hand" label="Max On Hand" description="Ceiling for on-hand quantity after delivery. The order will be capped so this maximum is not exceeded." />
         </div>
       </div>
 
@@ -1397,6 +1399,8 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
         category: hasCategory ? get("category") : "",
         cost: hasCost ? get("cost") : "",
         uom: hasUom ? get("uom") : "",
+        min_on_hand: mapping.min_on_hand ? get("min_on_hand") : "",
+        max_on_hand: mapping.max_on_hand ? get("max_on_hand") : "",
       };
       const productId = String(row.product ?? "").trim();
       const rule = (productRules || []).find(ru => String(ru.productId).trim() === productId);
@@ -1412,12 +1416,26 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       if (!_isTotal && uomConv.isPack && uomConv.packSize > 1 && !uomConv.hasConversion && (!rule || rule.caseSize == null) && finalOrder > 0) {
         finalOrder = Math.ceil(finalOrder / uomConv.packSize) * uomConv.packSize;
       }
+      let _minConstrained = false, _maxConstrained = false;
+      if (!_isTotal && effectiveOnHand !== null) {
+        const ohFactor = uomConv.orderToOnHandFactor ?? 1;
+        const minOH = row.min_on_hand !== "" ? parseFloat(row.min_on_hand) : NaN;
+        const maxOH = row.max_on_hand !== "" ? parseFloat(row.max_on_hand) : NaN;
+        if (!isNaN(minOH)) {
+          const minOrd = Math.ceil(Math.max(0, (minOH - effectiveOnHand) / ohFactor));
+          if (minOrd > finalOrder) { finalOrder = minOrd; _minConstrained = true; }
+        }
+        if (!isNaN(maxOH)) {
+          const maxOrd = Math.floor(Math.max(0, (maxOH - effectiveOnHand) / ohFactor));
+          if (maxOrd < finalOrder) { finalOrder = maxOrd; _maxConstrained = true; }
+        }
+      }
       const safeOrder = Math.max(0, finalOrder);
       const est_on_hand_after = !_isTotal && !isNaN(onHandNum) ? onHandNum + pendingQtyTotal + safeOrder * uomConv.orderToOnHandFactor : null;
       const units_ordered = !_isTotal && !isNaN(safeOrder) ? Math.round(safeOrder * (uomConv.orderToOnHandFactor ?? 1)) : null;
       const pendingQtys = {};
       pendingOrdrs.forEach(po => { pendingQtys[`pending_${po.id}`] = po._index?.get(pendingKey) ?? 0; });
-      return { ...row, suggested, order: safeOrder, days_on_hand, est_on_hand_after, appliedRule: rule || null, uomConv, _isTotal, _rawUsage, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "", units_ordered, ...pendingQtys };
+      return { ...row, suggested, order: safeOrder, days_on_hand, est_on_hand_after, appliedRule: rule || null, uomConv, _isTotal, _rawUsage, _minConstrained, _maxConstrained, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "", units_ordered, ...pendingQtys };
     });
 
   const [rows, setRows] = useState(() => buildRows(productRules, uomMappings, categoryUomSettings, prefixSuffixRules));
@@ -1465,13 +1483,21 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       const rule = rules.find(ru => String(ru.productId).trim() === String(r.product ?? "").trim());
       let finalOrder = rule ? applyProductRule(rule, s ?? 0, effectiveOnHand) : (s ?? 0);
       finalOrder = applyPackRounding(finalOrder, rule, uomConv);
+      let _minConstrained = false, _maxConstrained = false;
+      if (!r._isTotal && effectiveOnHand !== null) {
+        const ohFactor = uomConv.orderToOnHandFactor ?? 1;
+        const minOH = r.min_on_hand !== "" ? parseFloat(r.min_on_hand) : NaN;
+        const maxOH = r.max_on_hand !== "" ? parseFloat(r.max_on_hand) : NaN;
+        if (!isNaN(minOH)) { const mo = Math.ceil(Math.max(0, (minOH - effectiveOnHand) / ohFactor)); if (mo > finalOrder) { finalOrder = mo; _minConstrained = true; } }
+        if (!isNaN(maxOH)) { const mo = Math.floor(Math.max(0, (maxOH - effectiveOnHand) / ohFactor)); if (mo < finalOrder) { finalOrder = mo; _maxConstrained = true; } }
+      }
       const safeOrder = Math.max(0, finalOrder);
       const est_on_hand_after = r._isTotal || isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal + safeOrder * uomConv.orderToOnHandFactor;
       const days_on_hand = calcDaysOnHand(adjRow);
       const units_ordered = r._isTotal || isNaN(safeOrder) ? null : Math.round(safeOrder * (uomConv.orderToOnHandFactor ?? 1));
       const pendingQtys = {};
       poList.forEach(po => { pendingQtys[`pending_${po.id}`] = po._index?.get(pendingKey) ?? 0; });
-      return { ...r, daily_usage: effectiveDailyUsage, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, days_on_hand, uomConv, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "", units_ordered, ...pendingQtys };
+      return { ...r, daily_usage: effectiveDailyUsage, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, days_on_hand, uomConv, _minConstrained, _maxConstrained, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "", units_ordered, ...pendingQtys };
     }));
     setTargetLocal(td);
   };
@@ -1494,13 +1520,21 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       const rule = rules.find(ru => String(ru.productId).trim() === String(r.product ?? "").trim());
       let finalOrder = rule ? applyProductRule(rule, s ?? 0, effectiveOnHand) : (s ?? 0);
       finalOrder = applyPackRounding(finalOrder, rule, uomConv);
+      let _minConstrained = false, _maxConstrained = false;
+      if (!r._isTotal && effectiveOnHand !== null) {
+        const ohFactor = uomConv.orderToOnHandFactor ?? 1;
+        const minOH = r.min_on_hand !== "" ? parseFloat(r.min_on_hand) : NaN;
+        const maxOH = r.max_on_hand !== "" ? parseFloat(r.max_on_hand) : NaN;
+        if (!isNaN(minOH)) { const mo = Math.ceil(Math.max(0, (minOH - effectiveOnHand) / ohFactor)); if (mo > finalOrder) { finalOrder = mo; _minConstrained = true; } }
+        if (!isNaN(maxOH)) { const mo = Math.floor(Math.max(0, (maxOH - effectiveOnHand) / ohFactor)); if (mo < finalOrder) { finalOrder = mo; _maxConstrained = true; } }
+      }
       const safeOrder = Math.max(0, finalOrder);
       const est_on_hand_after = r._isTotal || isNaN(onHandNum) ? null : onHandNum + pendingQtyTotal + safeOrder * uomConv.orderToOnHandFactor;
       const days_on_hand = calcDaysOnHand(adjRow);
       const units_ordered = r._isTotal || isNaN(safeOrder) ? null : Math.round(safeOrder * (uomConv.orderToOnHandFactor ?? 1));
       const pendingQtys = {};
       poList.forEach(po => { pendingQtys[`pending_${po.id}`] = po._index?.get(pendingKey) ?? 0; });
-      return { ...r, daily_usage: effectiveDailyUsage, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, days_on_hand, uomConv, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "", units_ordered, ...pendingQtys };
+      return { ...r, daily_usage: effectiveDailyUsage, suggested: s, order: safeOrder, appliedRule: rule || null, est_on_hand_after, days_on_hand, uomConv, _minConstrained, _maxConstrained, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "", units_ordered, ...pendingQtys };
     }));
   };
   const setOrder = (idx, val) => setRows(prev => prev.map(r => {
@@ -1603,6 +1637,8 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
     { key: "on_hand_uom", label: "On Hand UoM", defaultWidth: 100 },
     { key: "daily_usage", label: usageConfig.mode === "calculated" ? `Daily Usage (÷${usageConfig.salesDays}d)` : "Daily Usage", defaultWidth: 120 },
     { key: "on_hand", label: "On Hand", defaultWidth: 90 },
+    ...(mapping.min_on_hand ? [{ key: "min_on_hand", label: "Min On Hand", defaultWidth: 100 }] : []),
+    ...(mapping.max_on_hand ? [{ key: "max_on_hand", label: "Max On Hand", defaultWidth: 100 }] : []),
     { key: "days_on_hand", label: "Days On Hand", defaultWidth: 110 },
     { key: "leadtime", label: "Lead Time", defaultWidth: 90 },
     { key: "suggested", label: "Suggested", defaultWidth: 100 },
@@ -1696,13 +1732,25 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       case "suggested": return r.suggested === null
         ? <span style={{ color: C.red, fontSize: 12 }}>N/A</span>
         : <span style={{ color: r.suggested === 0 ? C.green : C.accent, fontWeight: 700 }}>{fmtNum(r.suggested, 0)}</span>;
+      case "min_on_hand": {
+        const v = r.min_on_hand;
+        const n = parseFloat(v);
+        return <span style={{ color: !isNaN(n) ? C.purple : C.muted, fontSize: 12 }}>{!isNaN(n) ? fmtNum(n, 0) : "—"}</span>;
+      }
+      case "max_on_hand": {
+        const v = r.max_on_hand;
+        const n = parseFloat(v);
+        return <span style={{ color: !isNaN(n) ? C.orange : C.muted, fontSize: 12 }}>{!isNaN(n) ? fmtNum(n, 0) : "—"}</span>;
+      }
       case "est_on_hand_after": {
         const eoh = r.est_on_hand_after;
         if (eoh === null || eoh === undefined) return <span style={{ color: C.muted }}>—</span>;
         const rule = r.appliedRule;
         const overMax = rule?.maxOnHandAfter != null && eoh > rule.maxOnHandAfter;
-        const color = overMax ? C.red : eoh === 0 ? C.orange : C.green;
-        return <span style={{ color, fontWeight: 700, fontSize: 13 }} title={overMax ? `Exceeds max on hand after (${rule.maxOnHandAfter})` : undefined}>{fmtNum(eoh, 0)}{overMax ? " ⚠" : ""}</span>;
+        const color = overMax ? C.red : r._minConstrained ? C.purple : r._maxConstrained ? C.orange : eoh === 0 ? C.orange : C.green;
+        const indicator = overMax ? " ⚠" : r._minConstrained ? " ↑" : r._maxConstrained ? " ↓" : "";
+        const title = overMax ? `Exceeds max on hand after (${rule.maxOnHandAfter})` : r._minConstrained ? `Raised to meet min on hand (${r.min_on_hand})` : r._maxConstrained ? `Capped at max on hand (${r.max_on_hand})` : undefined;
+        return <span style={{ color, fontWeight: 700, fontSize: 13 }} title={title}>{fmtNum(eoh, 0)}{indicator}</span>;
       }
       case "order": return (
         <Input type="number" min={0} value={r.order} onChange={e => setOrder(r._idx, e.target.value)}
