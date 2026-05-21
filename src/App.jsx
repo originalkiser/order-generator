@@ -9,10 +9,111 @@ const fmtNum = (n, decimals = 1) =>
     ? "—"
     : Number(n).toLocaleString(undefined, { maximumFractionDigits: decimals });
 
+// For usage: show up to 6 decimal places for sub-1 values, 1 decimal otherwise
+const fmtUsage = (n) => {
+  if (n === null || n === undefined || n === "" || isNaN(Number(n))) return "—";
+  const num = Number(n);
+  if (num === 0) return "0";
+  const abs = Math.abs(num);
+  if (abs < 1 && abs > 0) {
+    // Find the first significant digit and show up to 6 decimal places
+    return num.toLocaleString(undefined, { maximumFractionDigits: 6, minimumSignificantDigits: 1 });
+  }
+  return num.toLocaleString(undefined, { maximumFractionDigits: 1 });
+};
+
 const fmtCurrency = (n) =>
   n === null || n === undefined || n === "" || isNaN(Number(n))
     ? "—"
     : "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// ── Shared sub-components ─────────────────────────────────────────────────────
+
+// Input that keeps a local draft value and only commits to parent on blur / Enter.
+// Prevents parent re-renders from losing focus while the user is mid-typing.
+function DraftInput({ value, onCommit, style, min = 0, ...rest }) {
+  const [draft, setDraft] = React.useState(String(value ?? ""));
+  const committed = React.useRef(String(value ?? ""));
+  // Sync when parent value changes externally (e.g. after Update All)
+  React.useEffect(() => {
+    const ext = String(value ?? "");
+    if (ext !== committed.current) { setDraft(ext); committed.current = ext; }
+  }, [value]);
+  const commit = () => {
+    const v = draft === "" ? "" : Math.max(min, Number(draft));
+    committed.current = String(v);
+    onCommit(v);
+  };
+  return (
+    <input
+      {...rest}
+      type="number"
+      min={min}
+      value={draft}
+      onChange={e => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === "Enter") { commit(); e.target.blur(); } }}
+      style={style}
+    />
+  );
+}
+
+// Callout card shown in Review step (Most Ordered / Least Ordered).
+// Module-level so React never remounts it due to a new function reference.
+function OrderCalloutCard({ title, accentColor, theRows, mode, setMode, n, setN, sortedList, label, onSetOrder, onSetGroupOrders }) {
+  const [bulkVal, setBulkVal] = React.useState("");
+  return (
+    <div style={{ flex: 1, minWidth: 220, background: C.surface, borderRadius: 10, padding: "12px 14px", border: `1px solid ${C.border}`, overflow: "auto", minHeight: 120 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 6, flexWrap: "wrap" }}>
+        <span style={{ color: C.muted, fontSize: 11, fontWeight: 700 }}>{title}</span>
+        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 3 }}>
+            {[["unit","by qty"],["group","by rank"]].map(([m,l]) => (
+              <button key={m} onClick={() => setMode(m)} style={{ padding: "2px 7px", borderRadius: 4, fontFamily: "inherit", fontWeight: 700, fontSize: 10, cursor: "pointer", border: `1px solid ${mode===m ? accentColor : C.border}`, background: mode===m ? accentColor+"33" : "transparent", color: mode===m ? accentColor : C.muted }}>{l}</button>
+            ))}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+            <button onClick={() => setN(v => Math.max(1, v-1))} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 3, color: C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 11, width: 18, height: 18, lineHeight: 1, padding: 0 }}>−</button>
+            <span style={{ color: C.text, fontSize: 11, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{n}</span>
+            <button onClick={() => setN(v => Math.min(sortedList.length || 1, v+1))} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 3, color: C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 11, width: 18, height: 18, lineHeight: 1, padding: 0 }}>+</button>
+          </div>
+        </div>
+      </div>
+      {theRows.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>—</div> : (<>
+        <div style={{ color: accentColor, fontWeight: 800, fontSize: 15, marginBottom: 6 }}>
+          {label}
+          <span style={{ color: C.muted, fontWeight: 400, fontSize: 11, marginLeft: 6 }}>{theRows.length} product{theRows.length !== 1 ? "s" : ""}</span>
+        </div>
+        <div style={{ display: "flex", gap: 5, marginBottom: 8, alignItems: "center" }}>
+          <input
+            type="number" value={bulkVal} onChange={e => setBulkVal(e.target.value)}
+            placeholder="New qty for all"
+            style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 5, color: C.text, fontFamily: "inherit", fontSize: 11, padding: "4px 8px", outline: "none" }}
+          />
+          <button
+            onClick={() => { if (bulkVal !== "") { onSetGroupOrders(theRows.map(r => r._idx), Number(bulkVal)); setBulkVal(""); } }}
+            disabled={bulkVal === ""}
+            style={{ background: bulkVal !== "" ? accentColor : C.border, border: "none", borderRadius: 5, color: "#fff", fontFamily: "inherit", fontWeight: 700, fontSize: 11, padding: "4px 10px", cursor: bulkVal !== "" ? "pointer" : "not-allowed", opacity: bulkVal !== "" ? 1 : 0.4, whiteSpace: "nowrap" }}
+          >Update All</button>
+        </div>
+        <div style={{ maxHeight: 140, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
+          {theRows.map(r => (
+            <div key={r._idx} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ color: C.text, fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
+                {r.product}{r.location ? <span style={{ color: C.muted, fontWeight: 400 }}> · {r.location}</span> : ""}
+              </span>
+              <DraftInput
+                value={r.order}
+                onCommit={v => onSetOrder(r._idx, v)}
+                style={{ width: 60, background: C.card, border: `1px solid ${C.border}`, borderRadius: 4, color: accentColor, fontFamily: "inherit", fontSize: 11, fontWeight: 700, padding: "2px 6px", outline: "none", textAlign: "right" }}
+              />
+            </div>
+          ))}
+        </div>
+      </>)}
+    </div>
+  );
+}
 
 function calcOrder(row, targetDays, onHandToOrderFactor = 1, onHandOverride = null) {
   const usage = parseFloat(row.daily_usage);
@@ -669,7 +770,15 @@ function ColumnFilter({ colKey, rows, textValue, onTextChange, checkedFilter, on
           <div style={{ padding: "6px 8px", borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "flex-end", gap: 6 }}>
             <button onMouseDown={e => { e.preventDefault(); onCheckedChange({ mode: "all", values: new Set() }); onTextChange(""); setSearch(""); handleOpen(false); }}
               style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 4, color: C.muted, fontFamily: "inherit", fontSize: 11, padding: "3px 10px", cursor: "pointer" }}>Clear</button>
-            <button onMouseDown={e => { e.preventDefault(); handleOpen(false); }}
+            <button onMouseDown={e => {
+              e.preventDefault();
+              // If user searched but left mode=all, apply the visible filtered values as a "some" filter
+              if (search.trim() && mode === "all" && filteredValues.length > 0 && filteredValues.length < allValues.length) {
+                onCheckedChange({ mode: "some", values: new Set(filteredValues) });
+              }
+              setSearch("");
+              handleOpen(false);
+            }}
               style={{ background: C.accent, border: "none", borderRadius: 4, color: "#fff", fontFamily: "inherit", fontSize: 11, padding: "3px 10px", cursor: "pointer", fontWeight: 700 }}>OK</button>
           </div>
         </div>
@@ -2304,7 +2413,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       );
       case "category": return <span style={{ color: C.muted, fontSize: 12 }}>{r.category}</span>;
       case "on_hand_uom": return <span style={{ color: C.muted, fontSize: 12 }}>{r.on_hand_uom || "—"}</span>;
-      case "daily_usage": return <span style={{ color: usageConfig.mode === "calculated" ? C.purple : C.muted, fontSize: 13 }}>{fmtNum(r.daily_usage)}</span>;
+      case "daily_usage": return <span style={{ color: usageConfig.mode === "calculated" ? C.purple : C.muted, fontSize: 13 }}>{fmtUsage(r.daily_usage)}</span>;
       case "on_hand": return <span style={{ color: C.muted, fontSize: 13 }}>{fmtNum(r.on_hand)}</span>;
       case "days_on_hand": {
         const doh = r.days_on_hand;
@@ -2398,13 +2507,11 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   }, 0) : 0;
   const editedCount = rows.filter(r => r.order !== r.suggested).length;
 
-  // Most/Least ordered callout cards
+  // Most/Least ordered callout cards — bulkVal lives inside OrderCalloutCard to avoid ReviewStep re-renders
   const [mostMode, setMostMode] = useState("unit");
   const [leastMode, setLeastMode] = useState("unit");
   const [mostN, setMostN] = useState(1);
   const [leastN, setLeastN] = useState(1);
-  const [mostBulkVal, setMostBulkVal] = useState("");
-  const [leastBulkVal, setLeastBulkVal] = useState("");
 
   const setGroupOrders = (idxList, val) => {
     const newOrder = Math.max(0, Number(val));
@@ -2858,76 +2965,25 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
         );
       })()}
 
-      {/* Most / Least ordered callout cards */}
-      {orderedRowsCallout.length > 0 && (() => {
-        const CalloutCard = ({ title, accentColor, theRows, mode, setMode, n, setN, bulkVal, setBulkVal, sortedList, label }) => (
-          <div style={{ flex: 1, minWidth: 220, background: C.surface, borderRadius: 10, padding: "12px 14px", border: `1px solid ${C.border}`, overflow: "auto", minHeight: 120 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 6, flexWrap: "wrap" }}>
-              <span style={{ color: C.muted, fontSize: 11, fontWeight: 700 }}>{title}</span>
-              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <div style={{ display: "flex", gap: 3 }}>
-                  {[["unit","by qty"],["group","by rank"]].map(([m,l]) => (
-                    <button key={m} onClick={() => setMode(m)} style={{ padding: "2px 7px", borderRadius: 4, fontFamily: "inherit", fontWeight: 700, fontSize: 10, cursor: "pointer", border: `1px solid ${mode===m ? accentColor : C.border}`, background: mode===m ? accentColor+"33" : "transparent", color: mode===m ? accentColor : C.muted }}>{l}</button>
-                  ))}
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                  <button onClick={() => setN(v => Math.max(1, v-1))} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 3, color: C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 11, width: 18, height: 18, lineHeight: 1, padding: 0 }}>−</button>
-                  <span style={{ color: C.text, fontSize: 11, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{n}</span>
-                  <button onClick={() => setN(v => Math.min(sortedList.length || 1, v+1))} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 3, color: C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 11, width: 18, height: 18, lineHeight: 1, padding: 0 }}>+</button>
-                </div>
-              </div>
-            </div>
-            {theRows.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>—</div> : (<>
-              <div style={{ color: accentColor, fontWeight: 800, fontSize: 15, marginBottom: 6 }}>
-                {label}
-                <span style={{ color: C.muted, fontWeight: 400, fontSize: 11, marginLeft: 6 }}>{theRows.length} product{theRows.length !== 1 ? "s" : ""}</span>
-              </div>
-              <div style={{ display: "flex", gap: 5, marginBottom: 8, alignItems: "center" }}>
-                <input
-                  type="number" value={bulkVal} onChange={e => setBulkVal(e.target.value)}
-                  placeholder="New qty for all"
-                  style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 5, color: C.text, fontFamily: "inherit", fontSize: 11, padding: "4px 8px", outline: "none" }}
-                />
-                <button
-                  onClick={() => { if (bulkVal !== "") { setGroupOrders(theRows.map(r => r._idx), bulkVal); setBulkVal(""); } }}
-                  disabled={bulkVal === ""}
-                  style={{ background: bulkVal !== "" ? accentColor : C.border, border: "none", borderRadius: 5, color: "#fff", fontFamily: "inherit", fontWeight: 700, fontSize: 11, padding: "4px 10px", cursor: bulkVal !== "" ? "pointer" : "not-allowed", opacity: bulkVal !== "" ? 1 : 0.4, whiteSpace: "nowrap" }}
-                >Update All</button>
-              </div>
-              <div style={{ maxHeight: 140, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
-                {theRows.map((r) => (
-                  <div key={r._idx} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ color: C.text, fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{r.product}{r.location ? <span style={{ color: C.muted, fontWeight: 400 }}> · {r.location}</span> : ""}</span>
-                    <input
-                      type="number" min={0} value={r.order}
-                      onChange={e => setOrder(r._idx, e.target.value)}
-                      style={{ width: 60, background: C.card, border: `1px solid ${C.border}`, borderRadius: 4, color: accentColor, fontFamily: "inherit", fontSize: 11, fontWeight: 700, padding: "2px 6px", outline: "none", textAlign: "right" }}
-                    />
-                  </div>
-                ))}
-              </div>
-            </>)}
-          </div>
-        );
-        return (
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <CalloutCard
-              title="MOST ORDERED" accentColor={C.accent}
-              theRows={maxRowsCallout} mode={mostMode} setMode={setMostMode}
-              n={mostN} setN={setMostN} sortedList={sortedDescCallout}
-              bulkVal={mostBulkVal} setBulkVal={setMostBulkVal}
-              label={mostMode === "unit" && mostN === 1 ? `${fmtNum(maxQtyCallout, 0)} units` : `Top ${mostN} ${mostMode === "group" ? "rank" : "qty"}${mostN > 1 ? "s" : ""}`}
-            />
-            <CalloutCard
-              title="LEAST ORDERED" accentColor={C.orange}
-              theRows={minRowsCallout.filter(() => minQtyCallout !== maxQtyCallout)} mode={leastMode} setMode={setLeastMode}
-              n={leastN} setN={setLeastN} sortedList={sortedAscCallout}
-              bulkVal={leastBulkVal} setBulkVal={setLeastBulkVal}
-              label={leastMode === "unit" && leastN === 1 ? `${fmtNum(minQtyCallout, 0)} units` : `Bottom ${leastN} ${leastMode === "group" ? "rank" : "qty"}${leastN > 1 ? "s" : ""}`}
-            />
-          </div>
-        );
-      })()}
+      {/* Most / Least ordered callout cards — module-level OrderCalloutCard keeps inputs stable */}
+      {orderedRowsCallout.length > 0 && (
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <OrderCalloutCard
+            title="MOST ORDERED" accentColor={C.accent}
+            theRows={maxRowsCallout} mode={mostMode} setMode={setMostMode}
+            n={mostN} setN={setMostN} sortedList={sortedDescCallout}
+            onSetOrder={setOrder} onSetGroupOrders={setGroupOrders}
+            label={mostMode === "unit" && mostN === 1 ? `${fmtNum(maxQtyCallout, 0)} units` : `Top ${mostN} ${mostMode === "group" ? "rank" : "qty"}${mostN > 1 ? "s" : ""}`}
+          />
+          <OrderCalloutCard
+            title="LEAST ORDERED" accentColor={C.orange}
+            theRows={minRowsCallout.filter(() => minQtyCallout !== maxQtyCallout)} mode={leastMode} setMode={setLeastMode}
+            n={leastN} setN={setLeastN} sortedList={sortedAscCallout}
+            onSetOrder={setOrder} onSetGroupOrders={setGroupOrders}
+            label={leastMode === "unit" && leastN === 1 ? `${fmtNum(minQtyCallout, 0)} units` : `Bottom ${leastN} ${leastMode === "group" ? "rank" : "qty"}${leastN > 1 ? "s" : ""}`}
+          />
+        </div>
+      )}
 
       {/* pending orders panel */}
       <input ref={pendingFileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }}
@@ -2941,7 +2997,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
           <span style={{ color: C.muted, fontSize: 12 }}>{pendingExpanded ? "▲" : "▼"}</span>
         </button>
         {pendingExpanded && (
-          <div style={{ padding: "0 16px 16px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ padding: "12px 16px 20px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 14, flexWrap: "wrap", minHeight: 220 }}>
             {[0, 1, 2].map(slotIdx => {
               const po = pendingOrders[slotIdx];
               const matchCount = po ? [...(po._index?.values() ?? [])].filter(v => v > 0).length : 0;
@@ -2959,7 +3015,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                   </div>
                   {!po ? (
                     <button onClick={() => { setPendingUploadIdx(slotIdx); pendingFileRef.current.click(); }}
-                      style={{ flex: 1, minHeight: 70, background: isDraggingOver ? C.accent + "18" : C.surface, border: `2px dashed ${isDraggingOver ? C.accent : C.border}`, borderRadius: 8, color: isDraggingOver ? C.accent : C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700 }}>
+                      style={{ flex: 1, minHeight: 110, background: isDraggingOver ? C.accent + "18" : C.surface, border: `2px dashed ${isDraggingOver ? C.accent : C.border}`, borderRadius: 8, color: isDraggingOver ? C.accent : C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700 }}>
                       {isDraggingOver ? "Drop to upload" : "+ Upload File"}
                     </button>
                   ) : (
@@ -3452,7 +3508,13 @@ function ExportStep({ rows, onBack }) {
     if (c.type === "product") {
       const prod = String(r.product ?? "").trim();
       const prodRow = productLookup.get(prod.toLowerCase());
-      if (!prodRow || !productInfo) return prod; // fallback to original ID
+      if (!prodRow || !productInfo) {
+        // Fallback when not mapped
+        const fb = c.fallback ?? "internal";
+        if (fb === "blank") return "";
+        if (fb === "manual" && c.fallbackValue) return c.fallbackValue;
+        return prod; // "internal" — use original product ID
+      }
       const colIdx = productInfo.headers.indexOf(c.prodCol);
       return colIdx >= 0 ? String(prodRow[colIdx] ?? "") : prod;
     }
@@ -3751,6 +3813,28 @@ function ExportStep({ rows, onBack }) {
                       <Select value={col.prodCol} onChange={(e) => update(col.id, { prodCol: e.target.value, header: e.target.value })} style={{ width: "100%" }}>
                         {productInfo.headers.map(h => <option key={h} value={h}>{h}</option>)}
                       </Select>
+                    </div>
+                  )}
+                  {col.type === "product" && (
+                    <div style={{ flex: 1, minWidth: 160 }}>
+                      <label style={{ color: C.muted, fontSize: 10, display: "block", marginBottom: 3 }}>IF NOT MAPPED</label>
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        {[["internal","Use Internal ID"], ["blank","Leave Blank"], ["manual","Manual Value"]].map(([v, l]) => (
+                          <button key={v} onClick={() => update(col.id, { fallback: v })}
+                            style={{ padding: "2px 8px", borderRadius: 4, fontFamily: "inherit", fontWeight: 700, fontSize: 10, cursor: "pointer",
+                              border: `1px solid ${(col.fallback ?? "internal") === v ? C.purple : C.border}`,
+                              background: (col.fallback ?? "internal") === v ? C.purple + "22" : "transparent",
+                              color: (col.fallback ?? "internal") === v ? C.purple : C.muted }}>{l}</button>
+                        ))}
+                      </div>
+                      {(col.fallback ?? "internal") === "manual" && (
+                        <Input
+                          value={col.fallbackValue ?? ""}
+                          onChange={e => update(col.id, { fallbackValue: e.target.value })}
+                          placeholder="Value for unmapped products"
+                          style={{ width: "100%", marginTop: 4 }}
+                        />
+                      )}
                     </div>
                   )}
                   {col.type === "constant" && (
