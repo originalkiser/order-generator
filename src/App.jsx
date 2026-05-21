@@ -2387,6 +2387,39 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   }, 0) : 0;
   const editedCount = rows.filter(r => r.order !== r.suggested).length;
 
+  // Most/Least ordered callout cards
+  const [mostMode, setMostMode] = useState("unit");
+  const [leastMode, setLeastMode] = useState("unit");
+  const [mostN, setMostN] = useState(1);
+  const [leastN, setLeastN] = useState(1);
+  const [mostBulkVal, setMostBulkVal] = useState("");
+  const [leastBulkVal, setLeastBulkVal] = useState("");
+
+  const setGroupOrders = (idxList, val) => {
+    const newOrder = Math.max(0, Number(val));
+    setRows(prev => prev.map(r => {
+      if (!idxList.includes(r._idx)) return r;
+      const onHandNum = parseFloat(r.on_hand);
+      const factor = r.uomConv?.orderToOnHandFactor ?? 1;
+      const est_on_hand_after = !isNaN(onHandNum) ? onHandNum + newOrder * factor : null;
+      return { ...r, order: newOrder, est_on_hand_after };
+    }));
+  };
+
+  const orderedRowsCallout = rows.filter(r => !r._isTotal && (Number(r.order) || 0) > 0);
+  const sortedDescCallout = [...new Set(orderedRowsCallout.map(r => Number(r.order) || 0))].sort((a, b) => b - a);
+  const sortedAscCallout  = [...sortedDescCallout].reverse();
+  const mostQtysCallout = mostMode === "unit"
+    ? sortedDescCallout.filter(q => q >= sortedDescCallout[0] - (mostN - 1)).slice(0, mostN)
+    : sortedDescCallout.slice(0, mostN);
+  const leastQtysCallout = leastMode === "unit"
+    ? sortedAscCallout.filter(q => q <= sortedAscCallout[0] + (leastN - 1)).slice(0, leastN)
+    : sortedAscCallout.slice(0, leastN);
+  const maxRowsCallout = orderedRowsCallout.filter(r => mostQtysCallout.includes(Number(r.order) || 0));
+  const minRowsCallout = orderedRowsCallout.filter(r => leastQtysCallout.includes(Number(r.order) || 0));
+  const maxQtyCallout = sortedDescCallout[0] ?? null;
+  const minQtyCallout = sortedAscCallout[0] ?? null;
+
   // progress bar for cost vs limits
   const hasMin = orderLimits?.orderMin != null;
   const hasMax = orderLimits?.orderMax != null;
@@ -2810,6 +2843,77 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
             {overMax && <p style={{ color: C.red, fontSize: 12, fontWeight: 700, margin: "6px 0 0" }}>⚠ Order exceeds maximum by {fmt2(trackVal - maxV)}</p>}
             {!overMax && underMin && <p style={{ color: C.orange, fontSize: 12, fontWeight: 700, margin: "6px 0 0" }}>⚠ Order is {fmt2(minV - trackVal)} below minimum</p>}
             {!overMax && !underMin && (minV != null || maxV != null) && <p style={{ color: C.green, fontSize: 12, fontWeight: 700, margin: "6px 0 0" }}>✓ Order is within limits</p>}
+          </div>
+        );
+      })()}
+
+      {/* Most / Least ordered callout cards */}
+      {orderedRowsCallout.length > 0 && (() => {
+        const CalloutCard = ({ title, accentColor, theRows, mode, setMode, n, setN, bulkVal, setBulkVal, sortedList, label }) => (
+          <div style={{ flex: 1, minWidth: 220, background: C.surface, borderRadius: 10, padding: "12px 14px", border: `1px solid ${C.border}`, overflow: "auto", minHeight: 120 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 6, flexWrap: "wrap" }}>
+              <span style={{ color: C.muted, fontSize: 11, fontWeight: 700 }}>{title}</span>
+              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                <div style={{ display: "flex", gap: 3 }}>
+                  {[["unit","by qty"],["group","by rank"]].map(([m,l]) => (
+                    <button key={m} onClick={() => setMode(m)} style={{ padding: "2px 7px", borderRadius: 4, fontFamily: "inherit", fontWeight: 700, fontSize: 10, cursor: "pointer", border: `1px solid ${mode===m ? accentColor : C.border}`, background: mode===m ? accentColor+"33" : "transparent", color: mode===m ? accentColor : C.muted }}>{l}</button>
+                  ))}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                  <button onClick={() => setN(v => Math.max(1, v-1))} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 3, color: C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 11, width: 18, height: 18, lineHeight: 1, padding: 0 }}>−</button>
+                  <span style={{ color: C.text, fontSize: 11, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{n}</span>
+                  <button onClick={() => setN(v => Math.min(sortedList.length || 1, v+1))} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 3, color: C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 11, width: 18, height: 18, lineHeight: 1, padding: 0 }}>+</button>
+                </div>
+              </div>
+            </div>
+            {theRows.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>—</div> : (<>
+              <div style={{ color: accentColor, fontWeight: 800, fontSize: 15, marginBottom: 6 }}>
+                {label}
+                <span style={{ color: C.muted, fontWeight: 400, fontSize: 11, marginLeft: 6 }}>{theRows.length} product{theRows.length !== 1 ? "s" : ""}</span>
+              </div>
+              <div style={{ display: "flex", gap: 5, marginBottom: 8, alignItems: "center" }}>
+                <input
+                  type="number" value={bulkVal} onChange={e => setBulkVal(e.target.value)}
+                  placeholder="New qty for all"
+                  style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 5, color: C.text, fontFamily: "inherit", fontSize: 11, padding: "4px 8px", outline: "none" }}
+                />
+                <button
+                  onClick={() => { if (bulkVal !== "") { setGroupOrders(theRows.map(r => r._idx), bulkVal); setBulkVal(""); } }}
+                  disabled={bulkVal === ""}
+                  style={{ background: bulkVal !== "" ? accentColor : C.border, border: "none", borderRadius: 5, color: "#fff", fontFamily: "inherit", fontWeight: 700, fontSize: 11, padding: "4px 10px", cursor: bulkVal !== "" ? "pointer" : "not-allowed", opacity: bulkVal !== "" ? 1 : 0.4, whiteSpace: "nowrap" }}
+                >Update All</button>
+              </div>
+              <div style={{ maxHeight: 140, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
+                {theRows.map((r) => (
+                  <div key={r._idx} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ color: C.text, fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{r.product}{r.location ? <span style={{ color: C.muted, fontWeight: 400 }}> · {r.location}</span> : ""}</span>
+                    <input
+                      type="number" min={0} value={r.order}
+                      onChange={e => setOrder(r._idx, e.target.value)}
+                      style={{ width: 60, background: C.card, border: `1px solid ${C.border}`, borderRadius: 4, color: accentColor, fontFamily: "inherit", fontSize: 11, fontWeight: 700, padding: "2px 6px", outline: "none", textAlign: "right" }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </>)}
+          </div>
+        );
+        return (
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <CalloutCard
+              title="MOST ORDERED" accentColor={C.accent}
+              theRows={maxRowsCallout} mode={mostMode} setMode={setMostMode}
+              n={mostN} setN={setMostN} sortedList={sortedDescCallout}
+              bulkVal={mostBulkVal} setBulkVal={setMostBulkVal}
+              label={mostMode === "unit" && mostN === 1 ? `${fmtNum(maxQtyCallout, 0)} units` : `Top ${mostN} ${mostMode === "group" ? "rank" : "qty"}${mostN > 1 ? "s" : ""}`}
+            />
+            <CalloutCard
+              title="LEAST ORDERED" accentColor={C.orange}
+              theRows={minRowsCallout.filter(() => minQtyCallout !== maxQtyCallout)} mode={leastMode} setMode={setLeastMode}
+              n={leastN} setN={setLeastN} sortedList={sortedAscCallout}
+              bulkVal={leastBulkVal} setBulkVal={setLeastBulkVal}
+              label={leastMode === "unit" && leastN === 1 ? `${fmtNum(minQtyCallout, 0)} units` : `Bottom ${leastN} ${leastMode === "group" ? "rank" : "qty"}${leastN > 1 ? "s" : ""}`}
+            />
           </div>
         );
       })()}
@@ -3302,7 +3406,6 @@ function ExportStep({ rows, onBack }) {
   // Editable local rows
   const [localRows, setLocalRows] = useState(() => rows.map(r => ({ ...r })));
   const updateLocalOrder = (idx, val) => setLocalRows(prev => prev.map(r => r._idx === idx ? { ...r, order: val === "" ? "" : Math.max(0, Number(val)) } : r));
-  const updateAllInGroup = (idxList, val) => setLocalRows(prev => prev.map(r => idxList.includes(r._idx) ? { ...r, order: Number(val) } : r));
 
   const setColFilter = (id, val) => setColFilters(f => ({ ...f, [id]: val }));
   const clearFilters = () => setColFilters({});
@@ -3392,29 +3495,6 @@ function ExportStep({ rows, onBack }) {
       }, 0)
     : null;
 
-  // Callout configuration state
-  const [mostMode, setMostMode] = useState("unit");
-  const [leastMode, setLeastMode] = useState("unit");
-  const [mostN, setMostN] = useState(1);
-  const [leastN, setLeastN] = useState(1);
-  const [mostBulkVal, setMostBulkVal] = useState("");
-  const [leastBulkVal, setLeastBulkVal] = useState("");
-
-  const sortedDesc = [...new Set(orderedRows.map(r => Number(r.order) || 0))].sort((a, b) => b - a);
-  const sortedAsc  = [...sortedDesc].reverse();
-
-  const mostQtys = mostMode === "unit"
-    ? sortedDesc.filter(q => q >= sortedDesc[0] - (mostN - 1)).slice(0, mostN)
-    : sortedDesc.slice(0, mostN);
-  const leastQtys = leastMode === "unit"
-    ? sortedAsc.filter(q => q <= sortedAsc[0] + (leastN - 1)).slice(0, leastN)
-    : sortedAsc.slice(0, leastN);
-
-  const maxRows = orderedRows.filter(r => mostQtys.includes(Number(r.order) || 0));
-  const minRows = orderedRows.filter(r => leastQtys.includes(Number(r.order) || 0));
-  const maxQty = sortedDesc[0] ?? null;
-  const minQty = sortedAsc[0] ?? null;
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
       <div>
@@ -3451,84 +3531,6 @@ function ExportStep({ rows, onBack }) {
             </div>
           </div>
 
-          {/* MOST ORDERED — resizable via resize: horizontal */}
-          {(() => {
-            const CalloutCard = ({ title, accentColor, theRows, mode, setMode, n, setN, bulkVal, setBulkVal, sortedList, label }) => (
-              <div style={{ flex: 1, minWidth: 220, background: C.surface, borderRadius: 10, padding: "12px 14px", border: `1px solid ${C.border}`, resize: "horizontal", overflow: "auto", minHeight: 180 }}>
-                {/* header */}
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 6, flexWrap: "wrap" }}>
-                  <span style={{ color: C.muted, fontSize: 11, fontWeight: 700 }}>{title}</span>
-                  <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                    <div style={{ display: "flex", gap: 3 }}>
-                      {[["unit","by qty"],["group","by rank"]].map(([m,l]) => (
-                        <button key={m} onClick={() => setMode(m)} style={{ padding: "2px 7px", borderRadius: 4, fontFamily: "inherit", fontWeight: 700, fontSize: 10, cursor: "pointer", border: `1px solid ${mode===m ? accentColor : C.border}`, background: mode===m ? accentColor+"33" : "transparent", color: mode===m ? accentColor : C.muted }}>{l}</button>
-                      ))}
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                      <button onClick={() => setN(v => Math.max(1, v-1))} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 3, color: C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 11, width: 18, height: 18, lineHeight: 1, padding: 0 }}>−</button>
-                      <span style={{ color: C.text, fontSize: 11, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{n}</span>
-                      <button onClick={() => setN(v => Math.min(sortedList.length || 1, v+1))} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 3, color: C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 11, width: 18, height: 18, lineHeight: 1, padding: 0 }}>+</button>
-                    </div>
-                  </div>
-                </div>
-
-                {theRows.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>—</div> : (<>
-                  {/* summary line */}
-                  <div style={{ color: accentColor, fontWeight: 800, fontSize: 15, marginBottom: 6 }}>
-                    {label}
-                    <span style={{ color: C.muted, fontWeight: 400, fontSize: 11, marginLeft: 6 }}>{theRows.length} product{theRows.length !== 1 ? "s" : ""}</span>
-                  </div>
-
-                  {/* bulk update bar */}
-                  <div style={{ display: "flex", gap: 5, marginBottom: 8, alignItems: "center" }}>
-                    <input
-                      type="number" value={bulkVal} onChange={e => setBulkVal(e.target.value)}
-                      placeholder="New qty for all"
-                      style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 5, color: C.text, fontFamily: "inherit", fontSize: 11, padding: "4px 8px", outline: "none" }}
-                    />
-                    <button
-                      onClick={() => { if (bulkVal !== "") { updateAllInGroup(theRows.map(r => r._idx), bulkVal); setBulkVal(""); } }}
-                      disabled={bulkVal === ""}
-                      style={{ background: bulkVal !== "" ? accentColor : C.border, border: "none", borderRadius: 5, color: "#fff", fontFamily: "inherit", fontWeight: 700, fontSize: 11, padding: "4px 10px", cursor: bulkVal !== "" ? "pointer" : "not-allowed", opacity: bulkVal !== "" ? 1 : 0.4, whiteSpace: "nowrap" }}
-                    >Update All</button>
-                  </div>
-
-                  {/* scrollable product list */}
-                  <div style={{ maxHeight: 160, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
-                    {theRows.map((r) => (
-                      <div key={r._idx} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ color: C.text, fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{r.product}</span>
-                        <input
-                          type="number"
-                          min={0}
-                          value={r.order}
-                          onChange={e => updateLocalOrder(r._idx, e.target.value)}
-                          style={{ width: 60, background: C.card, border: `1px solid ${C.border}`, borderRadius: 4, color: accentColor, fontFamily: "inherit", fontSize: 11, fontWeight: 700, padding: "2px 6px", outline: "none", textAlign: "right" }}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </>)}
-              </div>
-            );
-
-            return (<>
-              <CalloutCard
-                title="MOST ORDERED" accentColor={C.accent}
-                theRows={maxRows} mode={mostMode} setMode={setMostMode}
-                n={mostN} setN={setMostN} sortedList={sortedDesc}
-                bulkVal={mostBulkVal} setBulkVal={setMostBulkVal}
-                label={mostMode === "unit" && mostN === 1 ? `${fmtNum(maxQty, 0)} units` : `Top ${mostN} ${mostMode === "group" ? "rank" : "qty"}${mostN > 1 ? "s" : ""}`}
-              />
-              <CalloutCard
-                title="LEAST ORDERED" accentColor={C.orange}
-                theRows={minRows.filter(() => minQty !== maxQty)} mode={leastMode} setMode={setLeastMode}
-                n={leastN} setN={setLeastN} sortedList={sortedAsc}
-                bulkVal={leastBulkVal} setBulkVal={setLeastBulkVal}
-                label={leastMode === "unit" && leastN === 1 ? `${fmtNum(minQty, 0)} units` : `Bottom ${leastN} ${leastMode === "group" ? "rank" : "qty"}${leastN > 1 ? "s" : ""}`}
-              />
-            </>);
-          })()}
         </div>
       </div>
 
