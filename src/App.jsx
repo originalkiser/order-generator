@@ -1715,8 +1715,10 @@ function UomStep({ rawRows, headers, mapping, usageConfig, manualEntry, hasCateg
             <Input value={newPsText} onChange={e => setNewPsText(e.target.value)} placeholder={newPsMatchType === "suffix" ? "e.g. BB" : "e.g. SYN"} style={{ width: "100%" }} />
           </div>
           <div>
-            <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>ON-HAND UNITS PER PACK</label>
-            <Input type="number" value={newPsPackSize} onChange={e => setNewPsPackSize(e.target.value)} placeholder="e.g. 24" style={{ width: "100%" }} />
+            <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>
+              {newPsOrderMode === "pack" ? "ON-HAND UNITS PER PACK" : "ROUND UP TO MULTIPLE OF"}
+            </label>
+            <Input type="number" value={newPsPackSize} onChange={e => setNewPsPackSize(e.target.value)} placeholder="e.g. 12" style={{ width: "100%" }} />
           </div>
           <Btn small onClick={() => {
             if (!newPsText.trim() || !newPsPackSize) return;
@@ -1726,12 +1728,14 @@ function UomStep({ rawRows, headers, mapping, usageConfig, manualEntry, hasCateg
           }} disabled={!newPsText.trim() || !newPsPackSize}>Add</Btn>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "8px 12px", background: C.card, borderRadius: 8, border: `1px solid ${C.border}` }}>
-          <span style={{ color: C.muted, fontSize: 12, fontWeight: 700 }}>ORDER QTY DISPLAY:</span>
-          {[["pack", "By Pack (÷ pack size)"], ["unit", "By On-Hand Unit (round to pack)"]].map(([v, l]) => (
+          <span style={{ color: C.muted, fontSize: 12, fontWeight: 700 }}>ORDER MODE:</span>
+          {[["pack", "In Packs"], ["unit", "Round to Multiple of N"]].map(([v, l]) => (
             <button key={v} onClick={() => setNewPsOrderMode(v)} style={{ padding: "4px 12px", borderRadius: 6, fontFamily: "inherit", fontWeight: 700, fontSize: 12, cursor: "pointer", border: `1px solid ${newPsOrderMode === v ? C.accent : C.border}`, background: newPsOrderMode === v ? C.accentDim : "transparent", color: newPsOrderMode === v ? C.accent : C.muted }}>{l}</button>
           ))}
           <span style={{ color: C.muted, fontSize: 11, marginLeft: 4 }}>
-            {newPsOrderMode === "pack" ? `Order shows packs — e.g. 2 means 2 × ${newPsPackSize || "N"} = ${newPsPackSize ? 2 * Number(newPsPackSize) : "2N"} on-hand units` : `Order shows on-hand units, rounded up to nearest ${newPsPackSize || "N"}`}
+            {newPsOrderMode === "pack"
+              ? `Order column shows packs — e.g. order 2 = 2 × ${newPsPackSize || "N"} = ${newPsPackSize ? 2 * Number(newPsPackSize) : "2N"} on-hand units received`
+              : `Order column shows units, always rounded UP to the next multiple of ${newPsPackSize || "N"} — e.g. need 4 → order ${newPsPackSize ? Math.ceil(4 / Number(newPsPackSize)) * Number(newPsPackSize) : "N"}, need 13 → order ${newPsPackSize ? Math.ceil(13 / Number(newPsPackSize)) * Number(newPsPackSize) : "2N"}`}
           </span>
         </div>
         {prefixSuffixRules.length === 0 ? (
@@ -1739,7 +1743,7 @@ function UomStep({ rawRows, headers, mapping, usageConfig, manualEntry, hasCateg
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead><tr style={{ background: C.card }}>
-              {["Match", "Text", "Pack Size", "Exclusions", "Order Mode", ""].map((h, i) => (
+              {["Match", "Text", "N (Pack / Multiple)", "Exclusions", "Order Mode", ""].map((h, i) => (
                 <th key={i} style={{ padding: "6px 10px", textAlign: i >= 4 ? "right" : "left", color: C.muted, fontSize: 10, fontWeight: 700, borderBottom: `1px solid ${C.border}` }}>{h}</th>
               ))}
             </tr></thead>
@@ -1748,7 +1752,12 @@ function UomStep({ rawRows, headers, mapping, usageConfig, manualEntry, hasCateg
                 <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}33` }}>
                   <td style={{ padding: "6px 10px", color: C.muted }}>{r.matchType}</td>
                   <td style={{ padding: "6px 10px", color: C.purple, fontWeight: 700 }}>{r.text}</td>
-                  <td style={{ padding: "6px 10px", color: C.text }}>{r.purchaseSize} on-hand / pack</td>
+                  <td style={{ padding: "6px 10px" }}>
+                    <span style={{ color: C.text, fontWeight: 700 }}>{r.purchaseSize}</span>
+                    <span style={{ color: C.muted, marginLeft: 5, fontSize: 11 }}>
+                      {r.orderMode === "pack" ? `on-hand / pack` : `→ multiples: ${r.purchaseSize}, ${r.purchaseSize * 2}, ${r.purchaseSize * 3}…`}
+                    </span>
+                  </td>
                   <td style={{ padding: "6px 10px" }}>
                     {(() => {
                       const excl = r.exclusions || { products: [], categories: [] };
@@ -1766,8 +1775,9 @@ function UomStep({ rawRows, headers, mapping, usageConfig, manualEntry, hasCateg
                   </td>
                   <td style={{ padding: "6px 10px", color: C.muted, textAlign: "right" }}>
                     <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
-                      {[["pack", "By Pack"], ["unit", "By Unit"]].map(([v, l]) => (
+                      {[["pack", "In Packs"], ["unit", "×Multiple"]].map(([v, l]) => (
                         <button key={v} onClick={() => { const next = prefixSuffixRules.map(x => x.id === r.id ? { ...x, orderMode: v } : x); savePsRulesLocal(next); }}
+                          title={v === "pack" ? `Order column shows packs (1 pack = ${r.purchaseSize} on-hand units)` : `Order column shows units, rounded UP to next multiple of ${r.purchaseSize}`}
                           style={{ padding: "2px 8px", borderRadius: 4, fontFamily: "inherit", fontWeight: 700, fontSize: 10, cursor: "pointer", border: `1px solid ${r.orderMode === v ? C.accent : C.border}`, background: r.orderMode === v ? C.accentDim : "transparent", color: r.orderMode === v ? C.accent : C.muted }}>{l}</button>
                       ))}
                     </div>
@@ -2613,7 +2623,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                     placeholder="e.g. A1746" style={{ width: "100%" }} />
                 </div>
                 <div>
-                  <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>CASE SIZE</label>
+                  <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }} title="Rounds order up to next multiple — e.g. Case Size 12: need 4 → order 12, need 13 → order 24">CASE SIZE ×</label>
                   <Input type="number" value={newRuleCaseSize} onChange={e => setNewRuleCaseSize(e.target.value)} placeholder="e.g. 12" style={{ width: "100%" }} />
                 </div>
                 <div>
@@ -2639,7 +2649,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                 <Btn small onClick={addRule} disabled={!newRuleId.trim()}>Add</Btn>
               </div>
               <p style={{ color: C.muted, fontSize: 11, margin: "8px 0 0" }}>
-                Case size rounds up to the next multiple. Min/max clamp after rounding. On Hand / Order UoM overrides the category default. Press Enter to save quickly.
+                Case size ×: rounds order UP to next multiple (e.g. ×12 → need 4 order 12, need 13 order 24). Min/max clamp after rounding. On Hand / Order UoM overrides the category default. Press Enter to save quickly.
               </p>
             </div>
           )}
