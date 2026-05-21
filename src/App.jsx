@@ -1922,7 +1922,7 @@ function UomStep({ rawRows, headers, mapping, usageConfig, manualEntry, hasCateg
 }
 
 // ── STEP 3: Review Order ──────────────────────────────────────────────────────
-function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manualEntry, orderLimits, uomMappings, categoryUomSettings, prefixSuffixRules, onConfirm, onBack }) {
+function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manualEntry, orderLimits, uomMappings, categoryUomSettings, prefixSuffixRules, onConfirm, onBack, initialPendingOrders = [] }) {
   const hasCost = !!mapping.cost;
   const hasCategory = !!mapping.category;
   const hasUom = !!mapping.uom;
@@ -1946,10 +1946,11 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const rulesFileRef = useRef();
 
   const [totalRowsIncluded, setTotalRowsIncluded] = useState(() => new Set());
-  const [pendingOrders, setPendingOrders] = useState([]);
+  const [pendingOrders, setPendingOrders] = useState(initialPendingOrders);
   const [pendingExpanded, setPendingExpanded] = useState(false);
   const pendingFileRef = useRef();
   const [pendingUploadIdx, setPendingUploadIdx] = useState(0);
+  const [pendingDragSlot, setPendingDragSlot] = useState(null);
 
   // adj and ignoreMaxArg are explicit params (not closed-over state) so the lazy
   // useState initializer can call buildRows before those state declarations execute.
@@ -2565,7 +2566,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
           ⚙ Product Rules
           {productRules.length > 0 && <span style={{ background: C.purple, color: "#fff", borderRadius: 10, fontSize: 10, fontWeight: 800, padding: "1px 7px" }}>{productRules.length}</span>}
         </button>
-        <Btn onClick={() => onConfirm(rows)}>Confirm & Configure Export →</Btn>
+        <Btn onClick={() => onConfirm(rows, pendingOrders)}>Confirm & Configure Export →</Btn>
       </div>
     </div>
   );
@@ -2934,16 +2935,22 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
             {[0, 1, 2].map(slotIdx => {
               const po = pendingOrders[slotIdx];
               const matchCount = po ? [...(po._index?.values() ?? [])].filter(v => v > 0).length : 0;
+              const isDraggingOver = pendingDragSlot === slotIdx;
               return (
-                <div key={slotIdx} style={{ flex: "1 1 220px", minWidth: 200, background: C.card, borderRadius: 10, border: `1px solid ${po ? C.accent + "55" : C.border}`, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                <div key={slotIdx}
+                  onDragOver={e => { e.preventDefault(); setPendingDragSlot(slotIdx); }}
+                  onDragEnter={e => { e.preventDefault(); setPendingDragSlot(slotIdx); }}
+                  onDragLeave={() => setPendingDragSlot(null)}
+                  onDrop={e => { e.preventDefault(); setPendingDragSlot(null); const f = e.dataTransfer.files[0]; if (f) handlePendingFile(slotIdx, f); }}
+                  style={{ flex: "1 1 220px", minWidth: 200, background: isDraggingOver ? C.accent + "11" : C.card, borderRadius: 10, border: `1px solid ${isDraggingOver ? C.accent : po ? C.accent + "55" : C.border}`, padding: 12, display: "flex", flexDirection: "column", gap: 8, transition: "all .15s" }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <span style={{ color: C.muted, fontSize: 11, fontWeight: 700 }}>PENDING ORDER {slotIdx + 1}</span>
                     {po && <button onClick={() => removePendingOrder(po.id)} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 14, padding: 0 }}>✕</button>}
                   </div>
                   {!po ? (
                     <button onClick={() => { setPendingUploadIdx(slotIdx); pendingFileRef.current.click(); }}
-                      style={{ flex: 1, minHeight: 70, background: C.surface, border: `2px dashed ${C.border}`, borderRadius: 8, color: C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700 }}>
-                      + Upload File
+                      style={{ flex: 1, minHeight: 70, background: isDraggingOver ? C.accent + "18" : C.surface, border: `2px dashed ${isDraggingOver ? C.accent : C.border}`, borderRadius: 8, color: isDraggingOver ? C.accent : C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700 }}>
+                      {isDraggingOver ? "Drop to upload" : "+ Upload File"}
                     </button>
                   ) : (
                     <>
@@ -3278,7 +3285,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                   <th key={col.key} style={{ padding: "4px 8px", position: "sticky", top: 41,
                     ...(isPinned ? { left: leftOff, zIndex: 20, background: C.surface, boxShadow: isLastPinned ? `inset 0 -1px 0 ${C.border}, inset -2px 0 0 ${C.accentDim}` : `inset 0 -1px 0 ${C.border}, inset -1px 0 0 ${C.border}` }
                       : { zIndex: 10, background: C.surface, boxShadow: `inset 0 -1px 0 ${C.border}` }),
-                    overflow: "hidden" }}>
+                    overflow: "visible" }}>
                     {!col.noFilter && (
                       <ColumnFilter colKey={col.key} rows={rows}
                         textValue={colTextFilters[col.key] || ""}
@@ -3309,6 +3316,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                       <td key={col.key} style={{ padding: col.key === "order" ? "5px 8px" : "9px 8px 9px 10px",
                         textAlign: numericKeys.has(col.key) ? "right" : "left",
                         overflow: "hidden",
+                        borderRight: `1px solid ${C.border}22`,
                         ...(isPinned ? { position: "sticky", left: leftOff, zIndex: 5, background: cellBg,
                           boxShadow: isLastPinned ? `inset -2px 0 0 ${C.accentDim}` : `inset -1px 0 0 ${C.border}` } : {}) }}>
                         {renderCell(col, r, edited)}
@@ -3362,6 +3370,8 @@ function ExportStep({ rows, onBack }) {
   const [exportFormat, setExportFormat] = useState("xlsx");
   const [accountInfo, setAccountInfo] = useState(null);
   const accountInfoFileRef = useRef();
+  const [productInfo, setProductInfo] = useState(null);
+  const productInfoFileRef = useRef();
 
   const handleAccountFile = (file) => {
     const reader = new FileReader();
@@ -3381,6 +3391,35 @@ function ExportStep({ rows, onBack }) {
     reader.readAsArrayBuffer(file);
   };
 
+  const handleProductFile = (file) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+        if (json.length < 2) return;
+        const hdrs = json[0].map(h => String(h).trim());
+        const prodRows = json.slice(1).filter(r => r.some(c => String(c).trim() !== ""));
+        const norm = h => h.toLowerCase().replace(/[^a-z0-9]/g, "");
+        // Try to auto-detect internal ID column and vendor ID column
+        const intIdx = hdrs.findIndex(h => ["internal","internalid","partno","partnum","internalpart","ourpart","itemno","itemid","sku"].includes(norm(h)));
+        const vendIdx = hdrs.findIndex(h => ["vendor","vendorpart","vendoritem","vendorno","vendorid","supplierpart","supplieritem","mfgpart","externalid","externalpart"].includes(norm(h)));
+        setProductInfo({ headers: hdrs, rows: prodRows, internalColIdx: intIdx >= 0 ? intIdx : 0, vendorColIdx: vendIdx >= 0 ? vendIdx : (hdrs.length > 1 ? 1 : 0), fileName: file.name });
+      } catch {}
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const productLookup = productInfo ? (() => {
+    const m = new Map();
+    productInfo.rows.forEach(r => {
+      const key = String(r[productInfo.internalColIdx] ?? "").trim().toLowerCase();
+      if (key) m.set(key, r);
+    });
+    return m;
+  })() : new Map();
+
   const accountLookup = accountInfo ? (() => {
     const m = new Map();
     accountInfo.rows.forEach(r => {
@@ -3399,6 +3438,13 @@ function ExportStep({ rows, onBack }) {
       if (!acctRow || !accountInfo) return "";
       const colIdx = accountInfo.headers.indexOf(c.acctCol);
       return colIdx >= 0 ? String(acctRow[colIdx] ?? "") : "";
+    }
+    if (c.type === "product") {
+      const prod = String(r.product ?? "").trim();
+      const prodRow = productLookup.get(prod.toLowerCase());
+      if (!prodRow || !productInfo) return prod; // fallback to original ID
+      const colIdx = productInfo.headers.indexOf(c.prodCol);
+      return colIdx >= 0 ? String(prodRow[colIdx] ?? "") : prod;
     }
     return String(r[c.key] ?? "");
   };
@@ -3427,8 +3473,8 @@ function ExportStep({ rows, onBack }) {
     if (!previewSortKey) return 0;
     const col = cols.find(c => c.id === previewSortKey);
     if (!col || col.type === "blank" || col.type === "constant") return 0;
-    const av = col.type === "account" ? resolveCell(col, a) : a[col.key];
-    const bv = col.type === "account" ? resolveCell(col, b) : b[col.key];
+    const av = (col.type === "account" || col.type === "product") ? resolveCell(col, a) : a[col.key];
+    const bv = (col.type === "account" || col.type === "product") ? resolveCell(col, b) : b[col.key];
     return (isNaN(Number(av)) ? String(av ?? "").localeCompare(String(bv ?? "")) : Number(av) - Number(bv)) * previewSortDir;
   });
 
@@ -3438,6 +3484,11 @@ function ExportStep({ rows, onBack }) {
   const addAccount = () => {
     const firstHeader = accountInfo?.headers?.[0] || "";
     setCols(c => [...c, { id: nextId, type: "account", acctCol: firstHeader, header: firstHeader }]);
+    setNextId(n => n + 1);
+  };
+  const addProduct = () => {
+    const vendorHeader = productInfo?.headers?.[productInfo.vendorColIdx] || productInfo?.headers?.[0] || "";
+    setCols(c => [...c, { id: nextId, type: "product", prodCol: vendorHeader, header: "Vendor Part #" }]);
     setNextId(n => n + 1);
   };
   const remove = (id) => setCols(c => c.filter(col => col.id !== id));
@@ -3506,31 +3557,26 @@ function ExportStep({ rows, onBack }) {
       <div style={{ background: C.card, borderRadius: 12, padding: "18px 22px", border: `1px solid ${C.accentDim}` }}>
         <p style={{ color: C.muted, fontSize: 12, fontWeight: 700, margin: "0 0 14px" }}>ORDER SUMMARY</p>
 
-        {/* Top row: stats + two resizable callout panels side by side */}
-        <div style={{ display: "flex", gap: 12, alignItems: "stretch", flexWrap: "wrap" }}>
-
-          {/* stat pills */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 130, flex: "0 0 auto" }}>
-            {totalCostExport !== null && (
-              <div style={{ background: C.surface, borderRadius: 8, padding: "10px 14px", border: `1px solid ${C.green}44` }}>
-                <div style={{ color: C.muted, fontSize: 10, fontWeight: 700 }}>TOTAL ORDER $</div>
-                <div style={{ color: C.green, fontWeight: 800, fontSize: 20, marginTop: 2 }}>{fmtCurrency(totalCostExport)}</div>
-              </div>
-            )}
-            <div style={{ background: C.surface, borderRadius: 8, padding: "10px 14px", border: `1px solid ${C.border}` }}>
-              <div style={{ color: C.muted, fontSize: 10, fontWeight: 700 }}>PRODUCTS ORDERED</div>
-              <div style={{ color: C.text, fontWeight: 800, fontSize: 22, marginTop: 2 }}>{orderedRows.length}</div>
+        {/* Stat pills row */}
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {totalCostExport !== null && (
+            <div style={{ flex: "1 1 140px", background: C.surface, borderRadius: 10, padding: "14px 18px", border: `1px solid ${C.green}55` }}>
+              <div style={{ color: C.muted, fontSize: 10, fontWeight: 700 }}>TOTAL ORDER $</div>
+              <div style={{ color: C.green, fontWeight: 800, fontSize: 24, marginTop: 4 }}>{fmtCurrency(totalCostExport)}</div>
             </div>
-            <div style={{ background: C.surface, borderRadius: 8, padding: "10px 14px", border: `1px solid ${C.border}` }}>
-              <div style={{ color: C.muted, fontSize: 10, fontWeight: 700 }}>LOCATIONS</div>
-              <div style={{ color: C.text, fontWeight: 800, fontSize: 22, marginTop: 2 }}>{locations.length || "—"}</div>
-            </div>
-            <div style={{ background: C.surface, borderRadius: 8, padding: "10px 14px", border: `1px solid ${C.border}` }}>
-              <div style={{ color: C.muted, fontSize: 10, fontWeight: 700 }}>TOTAL UNITS</div>
-              <div style={{ color: C.accent, fontWeight: 800, fontSize: 22, marginTop: 2 }}>{fmtNum(totalQty, 0)}</div>
-            </div>
+          )}
+          <div style={{ flex: "1 1 140px", background: C.surface, borderRadius: 10, padding: "14px 18px", border: `1px solid ${C.border}` }}>
+            <div style={{ color: C.muted, fontSize: 10, fontWeight: 700 }}>PRODUCTS ORDERED</div>
+            <div style={{ color: C.text, fontWeight: 800, fontSize: 24, marginTop: 4 }}>{orderedRows.length}</div>
           </div>
-
+          <div style={{ flex: "1 1 140px", background: C.surface, borderRadius: 10, padding: "14px 18px", border: `1px solid ${C.border}` }}>
+            <div style={{ color: C.muted, fontSize: 10, fontWeight: 700 }}>LOCATIONS</div>
+            <div style={{ color: C.text, fontWeight: 800, fontSize: 24, marginTop: 4 }}>{locations.length || "—"}</div>
+          </div>
+          <div style={{ flex: "1 1 140px", background: C.surface, borderRadius: 10, padding: "14px 18px", border: `1px solid ${C.accentDim}` }}>
+            <div style={{ color: C.muted, fontSize: 10, fontWeight: 700 }}>TOTAL UNITS</div>
+            <div style={{ color: C.accent, fontWeight: 800, fontSize: 24, marginTop: 4 }}>{fmtNum(totalQty, 0)}</div>
+          </div>
         </div>
       </div>
 
@@ -3612,6 +3658,39 @@ function ExportStep({ rows, onBack }) {
         </div>
       </div>
 
+      {/* product info (part number mapping) upload */}
+      <input ref={productInfoFileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }}
+        onChange={e => { if (e.target.files[0]) { handleProductFile(e.target.files[0]); e.target.value = ""; } }} />
+      <div style={{ background: C.card, borderRadius: 12, padding: "16px 20px", border: `1px solid ${productInfo ? C.purple + "55" : C.border}` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <span style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>Vendor Part # Mapping</span>
+          {!productInfo ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ color: C.muted, fontSize: 12 }}>Upload a file to map internal part numbers to vendor part numbers on the export.</span>
+              <Btn small variant="ghost" onClick={() => productInfoFileRef.current?.click()} style={{ color: C.purple, borderColor: C.purple + "66" }}>Upload Mapping File</Btn>
+            </div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ color: C.purple, fontSize: 12, fontWeight: 700 }}>✓ {productInfo.fileName}</span>
+              <span style={{ color: C.muted, fontSize: 12 }}>{productLookup.size} products mapped</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <span style={{ color: C.muted, fontSize: 11 }}>Internal ID col:</span>
+                <Select value={productInfo.internalColIdx} onChange={e => setProductInfo(p => ({ ...p, internalColIdx: Number(e.target.value) }))} style={{ fontSize: 11, padding: "3px 6px" }}>
+                  {productInfo.headers.map((h, i) => <option key={i} value={i}>{h}</option>)}
+                </Select>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <span style={{ color: C.muted, fontSize: 11 }}>Vendor ID col:</span>
+                <Select value={productInfo.vendorColIdx} onChange={e => setProductInfo(p => ({ ...p, vendorColIdx: Number(e.target.value) }))} style={{ fontSize: 11, padding: "3px 6px" }}>
+                  {productInfo.headers.map((h, i) => <option key={i} value={i}>{h}</option>)}
+                </Select>
+              </div>
+              <Btn small variant="danger" onClick={() => { setProductInfo(null); setCols(c => c.filter(col => col.type !== "product")); }}>Remove</Btn>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* column builder */}
       <div style={{ background: C.card, borderRadius: 12, padding: "20px 24px", border: `1px solid ${C.border}` }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -3619,14 +3698,15 @@ function ExportStep({ rows, onBack }) {
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <Btn small variant="ghost" onClick={addData}>+ Data</Btn>
             {accountInfo && <Btn small variant="success" onClick={addAccount}>+ Account</Btn>}
+            {productInfo && <Btn small variant="ghost" onClick={addProduct} style={{ color: C.purple, borderColor: C.purple + "66" }}>+ Vendor Part</Btn>}
             <Btn small variant="ghost" onClick={addConstant} style={{ color: C.orange, borderColor: C.orange + "66" }}>+ Constant</Btn>
             <Btn small variant="ghost" onClick={addBlank}>+ Blank</Btn>
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {cols.map((col, i) => {
-            const badgeColor = col.type === "blank" ? C.muted : col.type === "account" ? C.green : col.type === "constant" ? C.orange : C.accent;
-            const borderColor = col.type === "blank" ? C.border : col.type === "account" ? C.green + "55" : col.type === "constant" ? C.orange + "55" : C.accentDim;
+            const badgeColor = col.type === "blank" ? C.muted : col.type === "account" ? C.green : col.type === "product" ? C.purple : col.type === "constant" ? C.orange : C.accent;
+            const borderColor = col.type === "blank" ? C.border : col.type === "account" ? C.green + "55" : col.type === "product" ? C.purple + "55" : col.type === "constant" ? C.orange + "55" : C.accentDim;
             return (
               <div key={col.id} style={{ display: "flex", alignItems: "center", gap: 10, background: C.surface, borderRadius: 8, padding: "10px 14px", border: `1px solid ${borderColor}` }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -3652,6 +3732,14 @@ function ExportStep({ rows, onBack }) {
                       <label style={{ color: C.muted, fontSize: 10, display: "block", marginBottom: 3 }}>ACCOUNT FIELD</label>
                       <Select value={col.acctCol} onChange={(e) => update(col.id, { acctCol: e.target.value, header: e.target.value })} style={{ width: "100%" }}>
                         {accountInfo.headers.map(h => <option key={h} value={h}>{h}</option>)}
+                      </Select>
+                    </div>
+                  )}
+                  {col.type === "product" && productInfo && (
+                    <div style={{ flex: 1, minWidth: 140 }}>
+                      <label style={{ color: C.muted, fontSize: 10, display: "block", marginBottom: 3 }}>VENDOR FIELD</label>
+                      <Select value={col.prodCol} onChange={(e) => update(col.id, { prodCol: e.target.value, header: e.target.value })} style={{ width: "100%" }}>
+                        {productInfo.headers.map(h => <option key={h} value={h}>{h}</option>)}
                       </Select>
                     </div>
                   )}
@@ -3747,6 +3835,7 @@ export default function App() {
   const [manualEntry, setManualEntry] = useState(null);
   const [orderLimits, setOrderLimits] = useState(null);
   const [finalRows, setFinalRows] = useState(null);
+  const [savedPendingOrders, setSavedPendingOrders] = useState([]);
   // Session memory: full MapStep state so Back doesn't reset the form
   const [savedMapState, setSavedMapState] = useState(null);
 
@@ -3861,7 +3950,9 @@ export default function App() {
           <ReviewStep rawRows={fileData.rows} headers={fileData.headers} mapping={mapping} targetDays={targetDays}
             usageConfig={usageConfig} manualEntry={manualEntry} orderLimits={orderLimits}
             uomMappings={uomMappings} categoryUomSettings={categoryUomSettings} prefixSuffixRules={prefixSuffixRules}
-            onConfirm={(rows) => { setFinalRows(rows); setStep(4); }} onBack={handleReviewBack} />
+            initialPendingOrders={savedPendingOrders}
+            onConfirm={(rows, pos) => { setFinalRows(rows); setSavedPendingOrders(pos || []); setStep(4); }}
+            onBack={handleReviewBack} />
         )}
         {step === 4 && finalRows && <ExportStep rows={finalRows} onBack={() => setStep(3)} />}
       </div>
