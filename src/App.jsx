@@ -375,7 +375,7 @@ async function fetchDataSource(conn) {
   if (conn.authType === "apikey" && conn.authValue)
     reqHeaders[conn.authHeader || "X-API-Key"] = conn.authValue;
 
-  const res = await fetch(conn.url, { headers: reqHeaders, mode: "cors" });
+  const res = await fetch(buildFetchUrl(conn), { headers: reqHeaders, mode: "cors" });
   if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
 
   const fmt = conn.dataFormat || "auto";
@@ -424,8 +424,16 @@ function applyConnectionFilters(data, filters) {
   return { ...data, rows: data.rows.filter(row => colIdxs.every(({ idx, vals }) => idx < 0 || vals.has(String(row[idx] ?? "")))) };
 }
 
+function buildFetchUrl(conn) {
+  const params = (conn.queryParams || []).filter(p => p.key.trim());
+  if (!params.length) return conn.url;
+  const base = conn.url.includes("?") ? conn.url : conn.url;
+  const sep = conn.url.includes("?") ? "&" : "?";
+  return base + sep + params.map(p => `${encodeURIComponent(p.key.trim())}=${encodeURIComponent(p.value)}`).join("&");
+}
+
 function newConnection() {
-  return { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: "", url: "", authType: "none", authHeader: "X-API-Key", authValue: "", dataFormat: "auto", jsonPath: "", refreshPolicy: "manual", lastFetched: null, lastFetchOk: false, filters: [] };
+  return { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: "", url: "", queryParams: [], authType: "none", authHeader: "X-API-Key", authValue: "", dataFormat: "auto", jsonPath: "", refreshPolicy: "manual", lastFetched: null, lastFetchOk: false, filters: [] };
 }
 
 // ── shared UI ─────────────────────────────────────────────────────────────────
@@ -847,9 +855,31 @@ function DataSourcePanel({ onLoadData, onClose }) {
 
               {/* URL */}
               <div>
-                <label style={{ color: C.muted, fontSize: 11, fontWeight: 700, display: "block", marginBottom: 6 }}>DATA URL</label>
+                <label style={{ color: C.muted, fontSize: 11, fontWeight: 700, display: "block", marginBottom: 6 }}>BASE URL</label>
                 <Input value={editConn.url} onChange={e => setField("url", e.target.value)} placeholder="https://..." style={{ width: "100%" }} />
-                <p style={{ color: C.muted, fontSize: 11, margin: "5px 0 0" }}>Paste a direct link to a CSV, XLSX, or JSON endpoint. Must be publicly accessible or allow CORS.</p>
+                <p style={{ color: C.muted, fontSize: 11, margin: "5px 0 0" }}>Paste the endpoint URL without query parameters. Add parameters below.</p>
+              </div>
+
+              {/* Query Parameters */}
+              <div style={{ background: C.card, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
+                <label style={{ color: C.muted, fontSize: 11, fontWeight: 700, display: "block", marginBottom: 10 }}>QUERY PARAMETERS</label>
+                {(editConn.queryParams || []).map((p, i) => (
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                    <Input value={p.key} onChange={e => setField("queryParams", editConn.queryParams.map((x, j) => j === i ? { ...x, key: e.target.value } : x))}
+                      placeholder="parameter name" style={{ width: "100%" }} />
+                    <Input value={p.value} onChange={e => setField("queryParams", editConn.queryParams.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
+                      placeholder="value" style={{ width: "100%" }} />
+                    <button onClick={() => setField("queryParams", editConn.queryParams.filter((_, j) => j !== i))}
+                      style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "6px 10px" }}>×</button>
+                  </div>
+                ))}
+                <Btn small variant="ghost" onClick={() => setField("queryParams", [...(editConn.queryParams || []), { key: "", value: "" }])}>+ Add Parameter</Btn>
+                {editConn.url && (editConn.queryParams || []).some(p => p.key.trim()) && (
+                  <div style={{ marginTop: 10, padding: "8px 10px", background: C.surface, borderRadius: 6, border: `1px solid ${C.border}` }}>
+                    <p style={{ color: C.muted, fontSize: 10, fontWeight: 700, margin: "0 0 3px" }}>FULL REQUEST URL</p>
+                    <p style={{ color: C.accent, fontSize: 11, margin: 0, wordBreak: "break-all", fontFamily: "monospace" }}>{buildFetchUrl(editConn)}</p>
+                  </div>
+                )}
               </div>
 
               {/* Auth */}
