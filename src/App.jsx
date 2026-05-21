@@ -134,6 +134,202 @@ function OrderCalloutCard({ title, accentColor, theRows, mode, setMode, n, setN,
   );
 }
 
+// ── Location multi-select (used in ManualBuildStep) ──────────────────────────
+function LocationMultiSelect({ locations, selected, onChange, placeholder = "Select locations…" }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const ref = useRef();
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+  const filtered = locations.filter(l => l.toLowerCase().includes(search.toLowerCase()));
+  const toggle = (loc) => { const n = new Set(selected); n.has(loc) ? n.delete(loc) : n.add(loc); onChange(n); };
+  const label = selected.size === 0 ? placeholder : [...selected].slice(0, 2).join(", ") + (selected.size > 2 ? ` +${selected.size - 2}` : "");
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button onClick={() => setOpen(x => !x)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: C.surface, border: `1px solid ${selected.size > 0 ? C.accent : C.border}`, borderRadius: 6, color: selected.size > 0 ? C.accent : C.muted, fontFamily: "inherit", fontSize: 13, padding: "6px 10px", cursor: "pointer", gap: 8 }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, textAlign: "left" }}>{label}</span>
+        <span style={{ fontSize: 10, flexShrink: 0 }}>{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div style={{ position: "absolute", zIndex: 200, top: "calc(100% + 4px)", left: 0, minWidth: 220, width: "100%", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, boxShadow: "0 6px 20px #0006", padding: 8 }}>
+          <input autoFocus type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search locations…"
+            style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 5, color: C.text, fontFamily: "inherit", fontSize: 12, padding: "5px 8px", outline: "none", boxSizing: "border-box", marginBottom: 6 }} />
+          <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 4px", cursor: "pointer", borderRadius: 4 }}>
+            <input type="checkbox" checked={selected.size === 0} onChange={() => onChange(new Set())} style={{ accentColor: C.muted }} />
+            <span style={{ color: C.muted, fontSize: 12, fontStyle: "italic" }}>No specific location</span>
+          </label>
+          <div style={{ maxHeight: 180, overflowY: "auto", marginTop: 2 }}>
+            {filtered.map(loc => (
+              <label key={loc} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 4px", cursor: "pointer", borderRadius: 4 }}>
+                <input type="checkbox" checked={selected.has(loc)} onChange={() => toggle(loc)} style={{ accentColor: C.accent }} />
+                <span style={{ color: C.text, fontSize: 13 }}>{loc}</span>
+              </label>
+            ))}
+            {filtered.length === 0 && <div style={{ color: C.muted, fontSize: 12, padding: "4px 4px" }}>No matches</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Manual Order Build step ───────────────────────────────────────────────────
+function ManualBuildStep({ onConfirm, onBack }) {
+  const [locations, setLocations] = useState([]);
+  const [newLocInput, setNewLocInput] = useState("");
+  const [orderEntries, setOrderEntries] = useState([]); // { id, product, location, qty }
+  const [newProduct, setNewProduct] = useState("");
+  const [newQty, setNewQty] = useState("");
+  const [newLocs, setNewLocs] = useState(new Set());
+
+  const addLocation = () => {
+    const loc = newLocInput.trim();
+    if (!loc || locations.includes(loc)) { setNewLocInput(""); return; }
+    setLocations(prev => [...prev, loc]);
+    setNewLocInput("");
+  };
+  const removeLocation = (loc) => {
+    setLocations(prev => prev.filter(l => l !== loc));
+    setNewLocs(prev => { const n = new Set(prev); n.delete(loc); return n; });
+  };
+
+  const addProduct = () => {
+    const prod = newProduct.trim();
+    if (!prod) return;
+    const qty = newQty === "" ? 0 : Math.max(0, Number(newQty));
+    const targetLocs = newLocs.size > 0 ? [...newLocs] : [""];
+    setOrderEntries(prev => [...prev, ...targetLocs.map(loc => ({ id: `${Date.now()}-${Math.random()}`, product: prod, location: loc, qty }))]);
+    setNewProduct(""); setNewQty(""); setNewLocs(new Set());
+  };
+
+  const handleConfirm = () => {
+    const rows = orderEntries.map((e, i) => ({
+      _idx: i, product: e.product, location: e.location, order: e.qty,
+      daily_usage: "", on_hand: "", leadtime: "", category: "", cost: "", uom: "",
+      min_on_hand: "", max_on_hand: "", suggested: e.qty,
+      days_on_hand: null, est_on_hand_after: null, appliedRule: null,
+      uomConv: { onHandToOrderFactor: 1, orderToOnHandFactor: 1, isPack: false, packSize: 1, hasConversion: false },
+      _isTotal: false, _rawUsage: "", _minConstrained: false, _maxConstrained: false,
+      on_hand_uom: "", order_uom: "", units_ordered: null, _manuallyBuilt: true,
+    }));
+    onConfirm(rows, locations);
+  };
+
+  const existingProducts = [...new Set(orderEntries.map(e => e.product))].sort();
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h2 style={{ color: C.text, fontSize: 22, fontWeight: 800, margin: 0 }}>Build Order Manually</h2>
+          <p style={{ color: C.muted, fontSize: 13, marginTop: 6 }}>Add locations (stores/warehouses), then enter products and quantities</p>
+        </div>
+        <Btn variant="ghost" onClick={onBack}>← Back</Btn>
+      </div>
+
+      {/* 1 — Locations */}
+      <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, padding: "16px 20px" }}>
+        <div style={{ color: C.text, fontWeight: 700, fontSize: 14, marginBottom: 12 }}>📍 Step 1 — Locations</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <Input value={newLocInput} onChange={e => setNewLocInput(e.target.value)} placeholder="e.g. Store 23, Warehouse A"
+            onKeyDown={e => { if (e.key === "Enter") addLocation(); }} style={{ flex: 1 }} />
+          <Btn small onClick={addLocation} disabled={!newLocInput.trim()}>Add</Btn>
+        </div>
+        {locations.length > 0 ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {locations.map(loc => (
+              <span key={loc} style={{ display: "flex", alignItems: "center", gap: 5, background: C.accent + "22", border: `1px solid ${C.accent}44`, borderRadius: 20, padding: "4px 10px", fontSize: 13, color: C.accent }}>
+                {loc}
+                <button onClick={() => removeLocation(loc)} style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0, marginLeft: 2 }}>×</button>
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>No locations added — products will be entered as general order items (no location split)</p>
+        )}
+      </div>
+
+      {/* 2 — Add Products */}
+      <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, padding: "16px 20px" }}>
+        <div style={{ color: C.text, fontWeight: 700, fontSize: 14, marginBottom: 14 }}>📦 Step 2 — Add Products</div>
+        <datalist id="mbs-prod-list">{existingProducts.map(p => <option key={p} value={p} />)}</datalist>
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div style={{ flex: 2, minWidth: 150 }}>
+            <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>PRODUCT ID</div>
+            <Input value={newProduct} onChange={e => setNewProduct(e.target.value)} placeholder="Product / Item #"
+              list="mbs-prod-list" onKeyDown={e => { if (e.key === "Enter") addProduct(); }} style={{ width: "100%" }} />
+          </div>
+          {locations.length > 0 && (
+            <div style={{ flex: 2, minWidth: 160 }}>
+              <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>LOCATION(S)</div>
+              <LocationMultiSelect locations={locations} selected={newLocs} onChange={setNewLocs} />
+            </div>
+          )}
+          <div>
+            <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>QTY</div>
+            <Input type="number" min={0} value={newQty} onChange={e => setNewQty(e.target.value)}
+              placeholder="0" style={{ width: 80 }} onKeyDown={e => { if (e.key === "Enter") addProduct(); }} />
+          </div>
+          <Btn onClick={addProduct} disabled={!newProduct.trim()}>+ Add</Btn>
+        </div>
+        {locations.length > 0 && newLocs.size === 0 && (
+          <p style={{ color: C.muted, fontSize: 11, marginTop: 8, margin: "8px 0 0" }}>No location selected — will add as a general item (no specific location)</p>
+        )}
+        {newLocs.size > 1 && (
+          <p style={{ color: C.accent, fontSize: 11, marginTop: 8, margin: "8px 0 0" }}>Will create {newLocs.size} rows (one per location) with quantity {newQty || 0} each</p>
+        )}
+      </div>
+
+      {/* 3 — Order list */}
+      {orderEntries.length > 0 && (
+        <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>Order Items <span style={{ color: C.muted, fontSize: 12, fontWeight: 400 }}>({orderEntries.length} row{orderEntries.length !== 1 ? "s" : ""})</span></span>
+            <Btn small variant="danger" onClick={() => setOrderEntries([])}>Clear All</Btn>
+          </div>
+          <div style={{ overflowY: "auto", maxHeight: 400 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "inherit" }}>
+              <thead style={{ position: "sticky", top: 0, background: C.card }}>
+                <tr>
+                  {["PRODUCT", "LOCATION", "QTY", ""].map((h, i) => (
+                    <th key={i} style={{ padding: "8px 12px", textAlign: i === 2 ? "right" : "left", color: C.muted, fontSize: 11, fontWeight: 700 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {orderEntries.map(e => (
+                  <tr key={e.id} style={{ borderTop: `1px solid ${C.border}` }}>
+                    <td style={{ padding: "6px 12px", color: C.text, fontSize: 13 }}>{e.product}</td>
+                    <td style={{ padding: "6px 12px", color: C.muted, fontSize: 12 }}>{e.location || <span style={{ fontStyle: "italic" }}>—</span>}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "right" }}>
+                      <DraftInput value={e.qty} onCommit={v => setOrderEntries(prev => prev.map(x => x.id === e.id ? { ...x, qty: Number(v) } : x))}
+                        style={{ width: 70, textAlign: "right", background: C.card, border: `1px solid ${C.border}`, borderRadius: 4, color: C.accent, fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "2px 6px", outline: "none" }} />
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "center" }}>
+                      <button onClick={() => setOrderEntries(prev => prev.filter(x => x.id !== e.id))} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 14, padding: 0 }}>✕</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm */}
+      {orderEntries.length > 0 && (
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <Btn onClick={handleConfirm}>Review Order →</Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function calcOrder(row, targetDays, onHandToOrderFactor = 1, onHandOverride = null) {
   const usage = parseFloat(row.daily_usage);
   const onHand = onHandOverride ?? parseFloat(row.on_hand);
@@ -591,25 +787,32 @@ const Select = ({ value, onChange, children, style: extra }) => (
 );
 
 // ── step bar ──────────────────────────────────────────────────────────────────
-const STEPS = ["Upload", "Map Columns", "Unit of Measure", "Review Order", "Export"];
-const StepBar = ({ current }) => (
-  <div style={{ display: "flex", gap: 0, marginBottom: 36 }}>
-    {STEPS.map((s, i) => {
-      const done = i < current, active = i === current;
-      return (
-        <div key={s} style={{ display: "flex", alignItems: "center", flex: i < STEPS.length - 1 ? 1 : "none" }}>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-            <div style={{ width: 32, height: 32, borderRadius: "50%", border: `2px solid ${done ? C.green : active ? C.accent : C.border}`, background: done ? C.green + "22" : active ? C.accent + "22" : "transparent", color: done ? C.green : active ? C.accent : C.muted, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13, transition: "all .3s" }}>
-              {done ? "✓" : i + 1}
+const STEPS_UPLOAD = ["Upload", "Map Columns", "Unit of Measure", "Review Order", "Export"];
+const STEPS_MANUAL = ["Upload", "Build Order", "Review Order", "Export"];
+// Map step number → display index for manual mode (steps 0,1,3,4 → 0,1,2,3)
+const manualStepIndex = { 0: 0, 1: 1, 3: 2, 4: 3 };
+const StepBar = ({ current, buildMode }) => {
+  const steps = buildMode === "manual" ? STEPS_MANUAL : STEPS_UPLOAD;
+  const idx = buildMode === "manual" ? (manualStepIndex[current] ?? 0) : current;
+  return (
+    <div style={{ display: "flex", gap: 0, marginBottom: 36 }}>
+      {steps.map((s, i) => {
+        const done = i < idx, active = i === idx;
+        return (
+          <div key={s} style={{ display: "flex", alignItems: "center", flex: i < steps.length - 1 ? 1 : "none" }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+              <div style={{ width: 32, height: 32, borderRadius: "50%", border: `2px solid ${done ? C.green : active ? C.accent : C.border}`, background: done ? C.green + "22" : active ? C.accent + "22" : "transparent", color: done ? C.green : active ? C.accent : C.muted, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13, transition: "all .3s" }}>
+                {done ? "✓" : i + 1}
+              </div>
+              <span style={{ fontSize: 11, color: active ? C.accent : done ? C.green : C.muted, fontWeight: active ? 700 : 400, whiteSpace: "nowrap" }}>{s}</span>
             </div>
-            <span style={{ fontSize: 11, color: active ? C.accent : done ? C.green : C.muted, fontWeight: active ? 700 : 400, whiteSpace: "nowrap" }}>{s}</span>
+            {i < steps.length - 1 && <div style={{ flex: 1, height: 2, background: done ? C.green + "55" : C.border, margin: "0 8px", marginBottom: 20, transition: "all .3s" }} />}
           </div>
-          {i < STEPS.length - 1 && <div style={{ flex: 1, height: 2, background: done ? C.green + "55" : C.border, margin: "0 8px", marginBottom: 20, transition: "all .3s" }} />}
-        </div>
-      );
-    })}
-  </div>
-);
+        );
+      })}
+    </div>
+  );
+};
 
 // ── data preview table ────────────────────────────────────────────────────────
 function DataPreview({ headers, rows, highlightCols = [], maxRows = 15 }) {
@@ -1169,7 +1372,7 @@ function DataSourcePanel({ onLoadData, onClose }) {
 }
 
 // ── STEP 1: Upload ────────────────────────────────────────────────────────────
-function UploadStep({ onData }) {
+function UploadStep({ onData, onManualBuild }) {
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
   const [preview, setPreview] = useState(null);
@@ -1245,6 +1448,27 @@ function UploadStep({ onData }) {
       )}
       {error && <p style={{ color: C.red, fontWeight: 600, textAlign: "center" }}>{error}</p>}
       <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={(e) => handleFile(e.target.files[0])} />
+
+      {/* Manual build option */}
+      {!preview && (
+        <div style={{ display: "flex", alignItems: "center", gap: 16, margin: "4px 0" }}>
+          <div style={{ flex: 1, height: 1, background: C.border }} />
+          <span style={{ color: C.muted, fontSize: 12 }}>or</span>
+          <div style={{ flex: 1, height: 1, background: C.border }} />
+        </div>
+      )}
+      {!preview && (
+        <div style={{ textAlign: "center" }}>
+          <button onClick={onManualBuild}
+            style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 36px", cursor: "pointer", fontFamily: "inherit", width: "100%", maxWidth: 520, display: "block", margin: "0 auto", transition: "all .2s" }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.background = C.accent + "08"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = "transparent"; }}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>✏️</div>
+            <div style={{ color: C.text, fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Build Order Manually</div>
+            <div style={{ color: C.muted, fontSize: 12 }}>Type in products and locations — no file needed</div>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -2060,7 +2284,7 @@ function UomStep({ rawRows, headers, mapping, usageConfig, manualEntry, hasCateg
 }
 
 // ── STEP 3: Review Order ──────────────────────────────────────────────────────
-function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manualEntry, orderLimits, uomMappings, categoryUomSettings, prefixSuffixRules, onConfirm, onBack, initialPendingOrders = [] }) {
+function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manualEntry, orderLimits, uomMappings, categoryUomSettings, prefixSuffixRules, onConfirm, onBack, initialPendingOrders = [], isManualBuild = false, initialRows = null, manualLocations = [] }) {
   const hasCost = !!mapping.cost;
   const hasCategory = !!mapping.category;
   const hasUom = !!mapping.uom;
@@ -2092,7 +2316,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
 
   // Add Products to Order section
   const [addProductsExpanded, setAddProductsExpanded] = useState(false);
-  const [manualAddList, setManualAddList] = useState([{ product: "", qty: "" }]);
+  const [manualAddList, setManualAddList] = useState([{ product: "", qty: "", location: "" }]);
   const [pushedManualItems, setPushedManualItems] = useState([]);
 
   // adj and ignoreMaxArg are explicit params (not closed-over state) so the lazy
@@ -2161,7 +2385,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const [newIgnoreMaxProd, setNewIgnoreMaxProd] = useState("");
   const saveIgnoreMaxState = (v) => { setIgnoreMax(v); saveIgnoreMax(v); };
 
-  const [rows, setRows] = useState(() => buildRows(productRules, uomMappings, categoryUomSettings, prefixSuffixRules, [], loadUsageAdjustments(), loadIgnoreMax()));
+  const [rows, setRows] = useState(() => initialRows ?? buildRows(productRules, uomMappings, categoryUomSettings, prefixSuffixRules, [], loadUsageAdjustments(), loadIgnoreMax()));
   const [targetLocal, setTargetLocal] = useState(targetDays);
   // colTextFilters: { [colKey]: string }  — type-in text filter
   // colCheckedFilters: { [colKey]: Set<string> }  — empty Set = show all; non-empty = show only checked
@@ -2317,14 +2541,19 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       let next = [...prev];
       validItems.forEach(item => {
         const prodKey = item.product.trim().toLowerCase();
+        const locKey = item.location.trim().toLowerCase();
         const qty = Math.max(0, Number(item.qty));
-        const existingIdx = next.findIndex(r => String(r.product ?? "").trim().toLowerCase() === prodKey);
+        // Match by product + location (if location specified)
+        const existingIdx = next.findIndex(r =>
+          String(r.product ?? "").trim().toLowerCase() === prodKey &&
+          (!locKey || String(r.location ?? "").trim().toLowerCase() === locKey)
+        );
         if (existingIdx >= 0) {
           next = next.map((r, i) => i === existingIdx ? { ...r, order: qty } : r);
         } else {
           const newIdx = -(Date.now() + Math.random() * 1000);
           next = [...next, {
-            _idx: newIdx, product: item.product.trim(), location: "",
+            _idx: newIdx, product: item.product.trim(), location: item.location.trim(),
             daily_usage: "", on_hand: "", leadtime: "", category: "", cost: "", uom: "",
             min_on_hand: "", max_on_hand: "", order: qty, suggested: qty,
             days_on_hand: null, est_on_hand_after: null, appliedRule: null,
@@ -2339,12 +2568,17 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
     setPushedManualItems(prev => {
       const next = [...prev];
       validItems.forEach(item => {
-        const existing = next.findIndex(p => p.product.trim().toLowerCase() === item.product.trim().toLowerCase());
+        const existing = next.findIndex(p =>
+          p.product.trim().toLowerCase() === item.product.trim().toLowerCase() &&
+          (p.location ?? "").trim().toLowerCase() === item.location.trim().toLowerCase()
+        );
         if (existing >= 0) next[existing] = { ...item };
-        else next.push({ product: item.product.trim(), qty: item.qty });
+        else next.push({ product: item.product.trim(), qty: item.qty, location: item.location.trim() });
       });
       return next;
     });
+    // reset list to single empty row after push
+    setManualAddList([{ product: "", qty: "", location: "" }]);
   };
 
   const handlePendingFile = (slotIdx, file) => {
@@ -2396,24 +2630,24 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const COLS = [
     { key: "location", label: "Location", defaultWidth: 120 },
     { key: "product", label: "Product", defaultWidth: 180 },
-    ...(hasCategory ? [{ key: "category", label: "Category", defaultWidth: 120 }] : []),
-    { key: "on_hand_uom", label: "On Hand UoM", defaultWidth: 100 },
-    { key: "daily_usage", label: usageConfig.mode === "calculated" ? `Daily Usage (÷${usageConfig.salesDays}d)` : "Daily Usage", defaultWidth: 120 },
-    { key: "on_hand", label: "On Hand", defaultWidth: 90 },
-    ...(mapping.min_on_hand || manualEntry?.fieldMode?.min_on_hand === "manual" ? [{ key: "min_on_hand", label: "Min On Hand", defaultWidth: 100 }] : []),
-    ...(mapping.max_on_hand || manualEntry?.fieldMode?.max_on_hand === "manual" ? [{ key: "max_on_hand", label: "Max On Hand", defaultWidth: 100 }] : []),
-    { key: "days_on_hand", label: "Days On Hand", defaultWidth: 110 },
-    { key: "leadtime", label: "Lead Time", defaultWidth: 90 },
-    { key: "suggested", label: "Suggested", defaultWidth: 100 },
-    { key: "est_on_hand_after", label: "Est. On Hand After", defaultWidth: 140 },
+    ...(hasCategory && !isManualBuild ? [{ key: "category", label: "Category", defaultWidth: 120 }] : []),
+    ...(!isManualBuild ? [{ key: "on_hand_uom", label: "On Hand UoM", defaultWidth: 100 }] : []),
+    ...(!isManualBuild ? [{ key: "daily_usage", label: usageConfig.mode === "calculated" ? `Daily Usage (÷${usageConfig.salesDays}d)` : "Daily Usage", defaultWidth: 120 }] : []),
+    ...(!isManualBuild ? [{ key: "on_hand", label: "On Hand", defaultWidth: 90 }] : []),
+    ...(!isManualBuild && (mapping.min_on_hand || manualEntry?.fieldMode?.min_on_hand === "manual") ? [{ key: "min_on_hand", label: "Min On Hand", defaultWidth: 100 }] : []),
+    ...(!isManualBuild && (mapping.max_on_hand || manualEntry?.fieldMode?.max_on_hand === "manual") ? [{ key: "max_on_hand", label: "Max On Hand", defaultWidth: 100 }] : []),
+    ...(!isManualBuild ? [{ key: "days_on_hand", label: "Days On Hand", defaultWidth: 110 }] : []),
+    ...(!isManualBuild ? [{ key: "leadtime", label: "Lead Time", defaultWidth: 90 }] : []),
+    ...(!isManualBuild ? [{ key: "suggested", label: "Suggested", defaultWidth: 100 }] : []),
+    ...(!isManualBuild ? [{ key: "est_on_hand_after", label: "Est. On Hand After", defaultWidth: 140 }] : []),
     ...pendingOrders.map((po, i) => ({
       key: `pending_${po.id}`,
       label: `Pending ${i + 1}${po.deliveryDate ? ` (${po.deliveryDate})` : po.leadtimeDays ? ` +${po.leadtimeDays}d` : ""}`,
       defaultWidth: 100, noFilter: true, noSort: true,
     })),
     { key: "order", label: "Order Qty", defaultWidth: 110, noFilter: true },
-    { key: "order_uom", label: "Order UoM", defaultWidth: 100 },
-    { key: "units_ordered", label: "Units Ordered", defaultWidth: 110, noFilter: true, noSort: true },
+    ...(!isManualBuild ? [{ key: "order_uom", label: "Order UoM", defaultWidth: 100 }] : []),
+    ...(!isManualBuild ? [{ key: "units_ordered", label: "Units Ordered", defaultWidth: 110, noFilter: true, noSort: true }] : []),
     ...(hasCost ? [{ key: "ext_cost", label: "Ext. Cost", defaultWidth: 100, noFilter: true, noSort: true }] : []),
   ];
 
@@ -3133,7 +3367,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       </div>
 
       {/* ignore-max exceptions */}
-          {(mapping.max_on_hand || manualEntry?.fieldMode?.max_on_hand === "manual") && (
+          {!isManualBuild && (mapping.max_on_hand || manualEntry?.fieldMode?.max_on_hand === "manual") && (
             <div style={{ background: C.surface, borderRadius: 10, border: `1px solid ${C.border}`, overflow: "hidden" }}>
               <button onClick={() => setIgnoreMaxExpanded(v => !v)}
                 style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit" }}>
@@ -3205,8 +3439,8 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
             </div>
           )}
 
-      {/* usage adjustment panel */}
-      <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+      {/* usage adjustment panel — hidden for manual builds */}
+      {!isManualBuild && <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
         <button onClick={() => setAdjExpanded(x => !x)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit" }}>
           <span style={{ color: C.text, fontWeight: 700, fontSize: 13 }}>
             📈 Usage Adjustment
@@ -3328,7 +3562,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
             </div>
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Add Products to Order */}
       <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
@@ -3356,9 +3590,17 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
             <datalist id="manual-add-prod-list">
               {[...new Set(rows.map(r => r.product).filter(Boolean))].sort().map(p => <option key={p} value={p} />)}
             </datalist>
+            {/* Location autocomplete from existing rows or manual locations */}
+            <datalist id="manual-add-loc-list">
+              {[...new Set([...manualLocations, ...rows.map(r => r.location).filter(Boolean)])].sort().map(l => <option key={l} value={l} />)}
+            </datalist>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {manualAddList.map((item, idx) => {
-                const matchRow = rows.find(r => !r._isTotal && item.product.trim() !== "" && String(r.product ?? "").trim().toLowerCase() === item.product.trim().toLowerCase());
+                const matchRow = rows.find(r =>
+                  !r._isTotal && item.product.trim() !== "" &&
+                  String(r.product ?? "").trim().toLowerCase() === item.product.trim().toLowerCase() &&
+                  (!item.location.trim() || String(r.location ?? "").trim().toLowerCase() === item.location.trim().toLowerCase())
+                );
                 const alreadyOnOrder = matchRow && matchRow.order > 0;
                 return (
                   <div key={idx} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -3368,7 +3610,15 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                       onChange={e => setManualAddList(prev => prev.map((it, i) => i === idx ? { ...it, product: e.target.value } : it))}
                       placeholder="Product ID"
                       list="manual-add-prod-list"
-                      style={{ flex: 1, minWidth: 140, background: alreadyOnOrder ? C.orange + "22" : C.card, border: `1px solid ${alreadyOnOrder ? C.orange : C.border}`, borderRadius: 6, color: alreadyOnOrder ? C.orange : C.text, fontFamily: "inherit", fontSize: 13, padding: "5px 10px", outline: "none" }}
+                      style={{ flex: 2, minWidth: 130, background: alreadyOnOrder ? C.orange + "22" : C.card, border: `1px solid ${alreadyOnOrder ? C.orange : C.border}`, borderRadius: 6, color: alreadyOnOrder ? C.orange : C.text, fontFamily: "inherit", fontSize: 13, padding: "5px 10px", outline: "none" }}
+                    />
+                    <input
+                      type="text"
+                      value={item.location}
+                      onChange={e => setManualAddList(prev => prev.map((it, i) => i === idx ? { ...it, location: e.target.value } : it))}
+                      placeholder="Location (optional)"
+                      list="manual-add-loc-list"
+                      style={{ flex: 1, minWidth: 110, background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, fontFamily: "inherit", fontSize: 13, padding: "5px 10px", outline: "none" }}
                     />
                     <input
                       type="number"
@@ -3376,7 +3626,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                       onChange={e => setManualAddList(prev => prev.map((it, i) => i === idx ? { ...it, qty: e.target.value } : it))}
                       placeholder="Qty"
                       min={0}
-                      style={{ width: 90, background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontFamily: "inherit", fontSize: 13, padding: "5px 10px", outline: "none" }}
+                      style={{ width: 80, background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontFamily: "inherit", fontSize: 13, padding: "5px 10px", outline: "none" }}
                     />
                     {manualAddList.length > 1 && (
                       <button onClick={() => setManualAddList(prev => prev.filter((_, i) => i !== idx))} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 4px" }}>✕</button>
@@ -3390,7 +3640,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
             </div>
             {/* Plus button to add another row */}
             <button
-              onClick={() => setManualAddList(prev => [...prev, { product: "", qty: "" }])}
+              onClick={() => setManualAddList(prev => [...prev, { product: "", qty: "", location: "" }])}
               style={{ marginTop: 10, background: "none", border: `1px dashed ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 12, padding: "5px 14px", width: "100%" }}
             >
               + Add another product
@@ -3410,7 +3660,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {pushedManualItems.map((item, i) => (
                     <span key={i} style={{ background: C.accent + "22", color: C.accent, border: `1px solid ${C.accent}44`, borderRadius: 6, padding: "3px 10px", fontSize: 12 }}>
-                      {item.product} × {item.qty}
+                      {item.product}{item.location ? <span style={{ opacity: 0.7 }}> @ {item.location}</span> : ""} × {item.qty}
                     </span>
                   ))}
                 </div>
@@ -3647,11 +3897,17 @@ function ExportStep({ rows, onBack }) {
     return m;
   })() : new Map();
 
+  // Normalize location for fuzzy matching: strip leading zeros, lowercase, collapse spaces
+  // e.g. "023" === "23", "Store 001" === "store 1"
+  const normLoc = (loc) => String(loc ?? "").trim().toLowerCase().replace(/\b0+(\d)/g, "$1").replace(/\s+/g, " ");
+
   const accountLookup = accountInfo ? (() => {
     const m = new Map();
     accountInfo.rows.forEach(r => {
-      const loc = String(r[accountInfo.locationColIdx] ?? "").trim().toLowerCase();
-      if (loc) m.set(loc, r);
+      const raw = String(r[accountInfo.locationColIdx] ?? "").trim().toLowerCase();
+      const norm = normLoc(raw);
+      if (raw) m.set(raw, r);       // exact (raw) match first
+      if (norm && norm !== raw) m.set(norm, r); // normalized fallback
     });
     return m;
   })() : new Map();
@@ -3660,8 +3916,9 @@ function ExportStep({ rows, onBack }) {
     if (c.type === "blank") return "";
     if (c.type === "constant") return c.value ?? "";
     if (c.type === "account") {
-      const loc = String(r.location ?? "").trim().toLowerCase();
-      const acctRow = accountLookup.get(loc);
+      const rawLoc = String(r.location ?? "").trim().toLowerCase();
+      const normLocVal = normLoc(rawLoc);
+      const acctRow = accountLookup.get(rawLoc) ?? accountLookup.get(normLocVal);
       if (!acctRow || !accountInfo) return "";
       const colIdx = accountInfo.headers.indexOf(c.acctCol);
       return colIdx >= 0 ? String(acctRow[colIdx] ?? "") : "";
@@ -4083,6 +4340,7 @@ function ExportStep({ rows, onBack }) {
 // ── Root ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [step, setStep] = useState(0);
+  const [buildMode, setBuildMode] = useState("upload"); // "upload" | "manual"
   const [fileData, setFileData] = useState(null);
   const [mapping, setMapping] = useState(null);
   const [targetDays, setTargetDays] = useState(14);
@@ -4091,6 +4349,8 @@ export default function App() {
   const [orderLimits, setOrderLimits] = useState(null);
   const [finalRows, setFinalRows] = useState(null);
   const [savedPendingOrders, setSavedPendingOrders] = useState([]);
+  const [manualBuiltRows, setManualBuiltRows] = useState(null); // rows from ManualBuildStep
+  const [manualLocations, setManualLocations] = useState([]); // location list from manual build
   // Session memory: full MapStep state so Back doesn't reset the form
   const [savedMapState, setSavedMapState] = useState(null);
 
@@ -4122,7 +4382,16 @@ export default function App() {
     setStep(3);
   };
 
-  const handleReviewBack = () => { setStep(2); };
+  const handleManualBuildConfirm = (rows, locs) => {
+    setManualBuiltRows(rows);
+    setManualLocations(locs);
+    setStep(3);
+  };
+
+  const handleReviewBack = () => {
+    if (buildMode === "manual") setStep(1);
+    else setStep(2);
+  };
 
   const [showDataSource, setShowDataSource] = useState(false);
   const [activeConnName, setActiveConnName] = useState(null);
@@ -4139,6 +4408,7 @@ export default function App() {
 
   const handleNewOrder = () => {
     setStep(0);
+    setBuildMode("upload");
     setFileData(null);
     setMapping(null);
     setUsageConfig(null);
@@ -4147,6 +4417,9 @@ export default function App() {
     setFinalRows(null);
     setSavedMapState(null);
     setSuggestion(null);
+    setManualBuiltRows(null);
+    setManualLocations([]);
+    setSavedPendingOrders([]);
   };
 
   return (
@@ -4178,9 +4451,12 @@ export default function App() {
         )}
       </div>
       <div style={{ maxWidth: 1040, margin: "0 auto", padding: "0 24px" }}>
-        <StepBar current={step} />
-        {step === 0 && <UploadStep onData={handleFileUploaded} />}
-        {step === 1 && fileData && (
+        <StepBar current={step} buildMode={buildMode} />
+        {step === 0 && <UploadStep onData={handleFileUploaded} onManualBuild={() => { setBuildMode("manual"); setStep(1); }} />}
+        {step === 1 && buildMode === "manual" && (
+          <ManualBuildStep onConfirm={handleManualBuildConfirm} onBack={() => { setBuildMode("upload"); setStep(0); }} />
+        )}
+        {step === 1 && buildMode === "upload" && fileData && (
           <MapStep
             headers={fileData.headers} rows={fileData.rows} fileName={fileData.fileName}
             initialState={savedMapState}
@@ -4188,7 +4464,7 @@ export default function App() {
             onConfirm={handleMapConfirm}
           />
         )}
-        {step === 2 && fileData && mapping && usageConfig && (
+        {step === 2 && buildMode === "upload" && fileData && mapping && usageConfig && (
           <UomStep
             rawRows={fileData.rows} headers={fileData.headers} mapping={mapping}
             usageConfig={usageConfig} manualEntry={manualEntry}
@@ -4201,12 +4477,21 @@ export default function App() {
             onConfirm={handleUomConfirm}
           />
         )}
-        {step === 3 && fileData && mapping && usageConfig && (
+        {step === 3 && (buildMode === "manual" ? manualBuiltRows : (fileData && mapping && usageConfig)) && (
           <ErrorBoundary>
-            <ReviewStep rawRows={fileData.rows} headers={fileData.headers} mapping={mapping} targetDays={targetDays}
-              usageConfig={usageConfig} manualEntry={manualEntry} orderLimits={orderLimits}
+            <ReviewStep
+              rawRows={buildMode === "manual" ? [] : fileData.rows}
+              headers={buildMode === "manual" ? [] : fileData.headers}
+              mapping={buildMode === "manual" ? {} : mapping}
+              targetDays={targetDays}
+              usageConfig={buildMode === "manual" ? { mode: "direct" } : usageConfig}
+              manualEntry={buildMode === "manual" ? null : manualEntry}
+              orderLimits={buildMode === "manual" ? null : orderLimits}
               uomMappings={uomMappings} categoryUomSettings={categoryUomSettings} prefixSuffixRules={prefixSuffixRules}
               initialPendingOrders={savedPendingOrders}
+              isManualBuild={buildMode === "manual"}
+              initialRows={buildMode === "manual" ? manualBuiltRows : null}
+              manualLocations={buildMode === "manual" ? manualLocations : []}
               onConfirm={(rows, pos) => { setFinalRows(rows); setSavedPendingOrders(pos || []); setStep(4); }}
               onBack={handleReviewBack} />
           </ErrorBoundary>
