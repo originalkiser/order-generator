@@ -1,7 +1,26 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, Component } from "react";
 import * as XLSX from "xlsx";
 
 const VERSION = "v1.0";
+
+// Error boundary to surface runtime crashes instead of blank-screening
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 40, color: "#e74c3c", fontFamily: "monospace", background: "#1e2335", minHeight: "100vh" }}>
+          <h2 style={{ marginBottom: 16 }}>⚠ Render Error (see below — refresh to retry)</h2>
+          <pre style={{ whiteSpace: "pre-wrap", fontSize: 13, color: "#e8ecf4" }}>
+            {this.state.error?.message}{"\n\n"}{this.state.error?.stack}
+          </pre>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 const fmtNum = (n, decimals = 1) =>
@@ -4183,14 +4202,16 @@ export default function App() {
           />
         )}
         {step === 3 && fileData && mapping && usageConfig && (
-          <ReviewStep rawRows={fileData.rows} headers={fileData.headers} mapping={mapping} targetDays={targetDays}
-            usageConfig={usageConfig} manualEntry={manualEntry} orderLimits={orderLimits}
-            uomMappings={uomMappings} categoryUomSettings={categoryUomSettings} prefixSuffixRules={prefixSuffixRules}
-            initialPendingOrders={savedPendingOrders}
-            onConfirm={(rows, pos) => { setFinalRows(rows); setSavedPendingOrders(pos || []); setStep(4); }}
-            onBack={handleReviewBack} />
+          <ErrorBoundary>
+            <ReviewStep rawRows={fileData.rows} headers={fileData.headers} mapping={mapping} targetDays={targetDays}
+              usageConfig={usageConfig} manualEntry={manualEntry} orderLimits={orderLimits}
+              uomMappings={uomMappings} categoryUomSettings={categoryUomSettings} prefixSuffixRules={prefixSuffixRules}
+              initialPendingOrders={savedPendingOrders}
+              onConfirm={(rows, pos) => { setFinalRows(rows); setSavedPendingOrders(pos || []); setStep(4); }}
+              onBack={handleReviewBack} />
+          </ErrorBoundary>
         )}
-        {step === 4 && finalRows && <ExportStep rows={finalRows} onBack={() => setStep(3)} />}
+        {step === 4 && finalRows && <ErrorBoundary><ExportStep rows={finalRows} onBack={() => setStep(3)} /></ErrorBoundary>}
       </div>
     </div>
   );
