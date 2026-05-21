@@ -2008,6 +2008,13 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       return { ...row, suggested, order: safeOrder, days_on_hand, est_on_hand_after, appliedRule: rule || null, uomConv, _isTotal, _rawUsage, _minConstrained, _maxConstrained, on_hand_uom: uomConv.onHandUom || "", order_uom: uomConv.orderUom || "", units_ordered, ...pendingQtys };
     });
 
+  // ignoreMax must be declared BEFORE rows so buildRows() can close over it safely
+  const [ignoreMax, setIgnoreMax] = useState(() => loadIgnoreMax());
+  const [ignoreMaxExpanded, setIgnoreMaxExpanded] = useState(false);
+  const [newIgnoreMaxCat, setNewIgnoreMaxCat] = useState("");
+  const [newIgnoreMaxProd, setNewIgnoreMaxProd] = useState("");
+  const saveIgnoreMaxState = (v) => { setIgnoreMax(v); saveIgnoreMax(v); };
+
   const [rows, setRows] = useState(() => buildRows(productRules, uomMappings, categoryUomSettings, prefixSuffixRules));
   const [targetLocal, setTargetLocal] = useState(targetDays);
   // colTextFilters: { [colKey]: string }  — type-in text filter
@@ -2017,11 +2024,6 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState(1);
   const [hideZero, setHideZero] = useState(false);
-  const [ignoreMax, setIgnoreMax] = useState(() => loadIgnoreMax());
-  const [ignoreMaxExpanded, setIgnoreMaxExpanded] = useState(false);
-  const [newIgnoreMaxCat, setNewIgnoreMaxCat] = useState("");
-  const [newIgnoreMaxProd, setNewIgnoreMaxProd] = useState("");
-  const saveIgnoreMaxState = (v) => { setIgnoreMax(v); saveIgnoreMax(v); };
 
   const [usageAdj, setUsageAdj] = useState(() => loadUsageAdjustments());
   const [adjExpanded, setAdjExpanded] = useState(false);
