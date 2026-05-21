@@ -1951,7 +1951,9 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const pendingFileRef = useRef();
   const [pendingUploadIdx, setPendingUploadIdx] = useState(0);
 
-  const buildRows = (productRules, uomMaps = uomMappings, catUom = categoryUomSettings, psRules = prefixSuffixRules, pendingOrdrs = []) =>
+  // adj and ignoreMaxArg are explicit params (not closed-over state) so the lazy
+  // useState initializer can call buildRows before those state declarations execute.
+  const buildRows = (productRules, uomMaps = uomMappings, catUom = categoryUomSettings, psRules = prefixSuffixRules, pendingOrdrs = [], adj = null, ignoreMaxArg = null) =>
     rawRows.map((r, i) => {
       const get = (field) => {
         if (manualEntry?.fieldMode?.[field] === "manual") return trimVal(manualEntry.manualValues?.[field] ?? "");
@@ -1968,7 +1970,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       }
       const _rawUsage = daily_usage;
       // Apply usage adjustment multiplier
-      const _adjMult = getUsageMultiplier(get("product"), hasCategory ? get("category") : "", usageAdj);
+      const _adjMult = getUsageMultiplier(get("product"), hasCategory ? get("category") : "", adj);
       if (!isNaN(parseFloat(daily_usage)) && _adjMult !== 1) {
         daily_usage = parseFloat(daily_usage) * _adjMult;
       }
@@ -1998,7 +2000,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       if (!_isTotal && uomConv.isPack && uomConv.packSize > 1 && !uomConv.hasConversion && (!rule || rule.caseSize == null) && finalOrder > 0) {
         finalOrder = Math.ceil(finalOrder / uomConv.packSize) * uomConv.packSize;
       }
-      const { order: _constrained, minC: _minConstrained, maxC: _maxConstrained } = applyOnHandConstraints(finalOrder, row, effectiveOnHand, uomConv, ignoreMax);
+      const { order: _constrained, minC: _minConstrained, maxC: _maxConstrained } = applyOnHandConstraints(finalOrder, row, effectiveOnHand, uomConv, ignoreMaxArg);
       finalOrder = _constrained;
       const safeOrder = Math.max(0, finalOrder);
       const est_on_hand_after = !_isTotal && !isNaN(onHandNum) ? onHandNum + pendingQtyTotal + safeOrder * uomConv.orderToOnHandFactor : null;
@@ -2015,7 +2017,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const [newIgnoreMaxProd, setNewIgnoreMaxProd] = useState("");
   const saveIgnoreMaxState = (v) => { setIgnoreMax(v); saveIgnoreMax(v); };
 
-  const [rows, setRows] = useState(() => buildRows(productRules, uomMappings, categoryUomSettings, prefixSuffixRules));
+  const [rows, setRows] = useState(() => buildRows(productRules, uomMappings, categoryUomSettings, prefixSuffixRules, [], loadUsageAdjustments(), loadIgnoreMax()));
   const [targetLocal, setTargetLocal] = useState(targetDays);
   // colTextFilters: { [colKey]: string }  — type-in text filter
   // colCheckedFilters: { [colKey]: Set<string> }  — empty Set = show all; non-empty = show only checked
