@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 
 const VERSION = "v1.0";
@@ -32,10 +32,10 @@ const fmtCurrency = (n) =>
 // Input that keeps a local draft value and only commits to parent on blur / Enter.
 // Prevents parent re-renders from losing focus while the user is mid-typing.
 function DraftInput({ value, onCommit, style, min = 0, ...rest }) {
-  const [draft, setDraft] = React.useState(String(value ?? ""));
-  const committed = React.useRef(String(value ?? ""));
+  const [draft, setDraft] = useState(String(value ?? ""));
+  const committed = useRef(String(value ?? ""));
   // Sync when parent value changes externally (e.g. after Update All)
-  React.useEffect(() => {
+  useEffect(() => {
     const ext = String(value ?? "");
     if (ext !== committed.current) { setDraft(ext); committed.current = ext; }
   }, [value]);
@@ -61,7 +61,7 @@ function DraftInput({ value, onCommit, style, min = 0, ...rest }) {
 // Callout card shown in Review step (Most Ordered / Least Ordered).
 // Module-level so React never remounts it due to a new function reference.
 function OrderCalloutCard({ title, accentColor, theRows, mode, setMode, n, setN, sortedList, label, onSetOrder, onSetGroupOrders }) {
-  const [bulkVal, setBulkVal] = React.useState("");
+  const [bulkVal, setBulkVal] = useState("");
   return (
     <div style={{ flex: 1, minWidth: 220, background: C.surface, borderRadius: 10, padding: "12px 14px", border: `1px solid ${C.border}`, overflow: "auto", minHeight: 120 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 6, flexWrap: "wrap" }}>
@@ -2071,6 +2071,11 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
   const [pendingUploadIdx, setPendingUploadIdx] = useState(0);
   const [pendingDragSlot, setPendingDragSlot] = useState(null);
 
+  // Add Products to Order section
+  const [addProductsExpanded, setAddProductsExpanded] = useState(false);
+  const [manualAddList, setManualAddList] = useState([{ product: "", qty: "" }]);
+  const [pushedManualItems, setPushedManualItems] = useState([]);
+
   // adj and ignoreMaxArg are explicit params (not closed-over state) so the lazy
   // useState initializer can call buildRows before those state declarations execute.
   const buildRows = (productRules, uomMaps = uomMappings, catUom = categoryUomSettings, psRules = prefixSuffixRules, pendingOrdrs = [], adj = null, ignoreMaxArg = null) =>
@@ -2274,6 +2279,53 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
       poList.forEach(po => { pendingQtys[`pending_${po.id}`] = po._index?.get(pendingKey) ?? 0; });
       return { ...r, daily_usage: effectiveDailyUsage, suggested: s, order: newOrder, est_on_hand_after, units_ordered, ...pendingQtys };
     }));
+  };
+
+  // When ReviewStep mounts with restored pending orders (coming back from Export step),
+  // re-apply their quantities to the rows so the pending columns show actual values.
+  useEffect(() => {
+    if (initialPendingOrders && initialPendingOrders.length > 0) {
+      applyPendingToRows(initialPendingOrders);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally run once on mount only
+
+  // Add Products to Order handler
+  const handleAddToOrder = () => {
+    const validItems = manualAddList.filter(item => item.product.trim() && item.qty !== "" && !isNaN(Number(item.qty)));
+    if (!validItems.length) return;
+    setRows(prev => {
+      let next = [...prev];
+      validItems.forEach(item => {
+        const prodKey = item.product.trim().toLowerCase();
+        const qty = Math.max(0, Number(item.qty));
+        const existingIdx = next.findIndex(r => String(r.product ?? "").trim().toLowerCase() === prodKey);
+        if (existingIdx >= 0) {
+          next = next.map((r, i) => i === existingIdx ? { ...r, order: qty } : r);
+        } else {
+          const newIdx = -(Date.now() + Math.random() * 1000);
+          next = [...next, {
+            _idx: newIdx, product: item.product.trim(), location: "",
+            daily_usage: "", on_hand: "", leadtime: "", category: "", cost: "", uom: "",
+            min_on_hand: "", max_on_hand: "", order: qty, suggested: qty,
+            days_on_hand: null, est_on_hand_after: null, appliedRule: null,
+            uomConv: { onHandToOrderFactor: 1, orderToOnHandFactor: 1, isPack: false, packSize: 1, hasConversion: false },
+            _isTotal: false, _rawUsage: "", _minConstrained: false, _maxConstrained: false,
+            on_hand_uom: "", order_uom: "", units_ordered: qty, _manuallyAdded: true,
+          }];
+        }
+      });
+      return next;
+    });
+    setPushedManualItems(prev => {
+      const next = [...prev];
+      validItems.forEach(item => {
+        const existing = next.findIndex(p => p.product.trim().toLowerCase() === item.product.trim().toLowerCase());
+        if (existing >= 0) next[existing] = { ...item };
+        else next.push({ product: item.product.trim(), qty: item.qty });
+      });
+      return next;
+    });
   };
 
   const handlePendingFile = (slotIdx, file) => {
@@ -3255,6 +3307,96 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
                 </div>
               )}
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* Add Products to Order */}
+      <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+        <button onClick={() => setAddProductsExpanded(x => !x)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit" }}>
+          <span style={{ color: C.text, fontWeight: 700, fontSize: 13 }}>
+            ➕ Add Products to Order
+            {pushedManualItems.length > 0 && (
+              <span style={{ marginLeft: 8, color: C.accent, fontSize: 12 }}>({pushedManualItems.length} added)</span>
+            )}
+          </span>
+          <span style={{ color: C.muted, fontSize: 12 }}>{addProductsExpanded ? "▲" : "▼"}</span>
+        </button>
+        {addProductsExpanded && (
+          <div style={{ padding: "0 16px 16px", borderTop: `1px solid ${C.border}` }}>
+            <p style={{ color: C.muted, fontSize: 12, margin: "10px 0 12px" }}>
+              Add products by product ID and quantity. Products already in the order will have their order quantity overridden.
+            </p>
+            {/* Top "Add to Order" button — always shown */}
+            <div style={{ marginBottom: 12 }}>
+              <Btn onClick={handleAddToOrder} disabled={!manualAddList.some(i => i.product.trim() && i.qty !== "")}>
+                Add to Order ✓
+              </Btn>
+            </div>
+            {/* Product + qty input rows */}
+            <datalist id="manual-add-prod-list">
+              {[...new Set(rows.map(r => r.product).filter(Boolean))].sort().map(p => <option key={p} value={p} />)}
+            </datalist>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {manualAddList.map((item, idx) => {
+                const matchRow = rows.find(r => !r._isTotal && item.product.trim() !== "" && String(r.product ?? "").trim().toLowerCase() === item.product.trim().toLowerCase());
+                const alreadyOnOrder = matchRow && matchRow.order > 0;
+                return (
+                  <div key={idx} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <input
+                      type="text"
+                      value={item.product}
+                      onChange={e => setManualAddList(prev => prev.map((it, i) => i === idx ? { ...it, product: e.target.value } : it))}
+                      placeholder="Product ID"
+                      list="manual-add-prod-list"
+                      style={{ flex: 1, minWidth: 140, background: alreadyOnOrder ? C.orange + "22" : C.card, border: `1px solid ${alreadyOnOrder ? C.orange : C.border}`, borderRadius: 6, color: alreadyOnOrder ? C.orange : C.text, fontFamily: "inherit", fontSize: 13, padding: "5px 10px", outline: "none" }}
+                    />
+                    <input
+                      type="number"
+                      value={item.qty}
+                      onChange={e => setManualAddList(prev => prev.map((it, i) => i === idx ? { ...it, qty: e.target.value } : it))}
+                      placeholder="Qty"
+                      min={0}
+                      style={{ width: 90, background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontFamily: "inherit", fontSize: 13, padding: "5px 10px", outline: "none" }}
+                    />
+                    {manualAddList.length > 1 && (
+                      <button onClick={() => setManualAddList(prev => prev.filter((_, i) => i !== idx))} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 4px" }}>✕</button>
+                    )}
+                    {alreadyOnOrder && (
+                      <span style={{ color: C.orange, fontSize: 11, width: "100%", marginTop: -4 }}>On order: {matchRow.order} — new amount will override prefilled order amount</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {/* Plus button to add another row */}
+            <button
+              onClick={() => setManualAddList(prev => [...prev, { product: "", qty: "" }])}
+              style={{ marginTop: 10, background: "none", border: `1px dashed ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 12, padding: "5px 14px", width: "100%" }}
+            >
+              + Add another product
+            </button>
+            {/* Bottom "Add to Order" button — only shown when list has more than 3 items */}
+            {manualAddList.length > 3 && (
+              <div style={{ marginTop: 12 }}>
+                <Btn onClick={handleAddToOrder} disabled={!manualAddList.some(i => i.product.trim() && i.qty !== "")}>
+                  Add to Order ✓
+                </Btn>
+              </div>
+            )}
+            {/* Summary of already-pushed items */}
+            {pushedManualItems.length > 0 && (
+              <div style={{ marginTop: 14, padding: "10px 12px", background: C.accent + "18", border: `1px solid ${C.accent}44`, borderRadius: 8 }}>
+                <div style={{ color: C.accent, fontWeight: 700, fontSize: 11, marginBottom: 6 }}>ADDED TO ORDER</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {pushedManualItems.map((item, i) => (
+                    <span key={i} style={{ background: C.accent + "22", color: C.accent, border: `1px solid ${C.accent}44`, borderRadius: 6, padding: "3px 10px", fontSize: 12 }}>
+                      {item.product} × {item.qty}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
