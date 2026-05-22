@@ -148,6 +148,7 @@ function LocationMultiSelect({ locations, selected, onChange, placeholder = "Sel
   const filtered = locations.filter(l => l.toLowerCase().includes(search.toLowerCase()));
   const toggle = (loc) => { const n = new Set(selected); n.has(loc) ? n.delete(loc) : n.add(loc); onChange(n); };
   const label = selected.size === 0 ? placeholder : [...selected].slice(0, 2).join(", ") + (selected.size > 2 ? ` +${selected.size - 2}` : "");
+  const allSelected = filtered.length > 0 && filtered.every(l => selected.has(l));
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <button onClick={() => setOpen(x => !x)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: C.surface, border: `1px solid ${selected.size > 0 ? C.accent : C.border}`, borderRadius: 6, color: selected.size > 0 ? C.accent : C.muted, fontFamily: "inherit", fontSize: 13, padding: "6px 10px", cursor: "pointer", gap: 8 }}>
@@ -158,6 +159,19 @@ function LocationMultiSelect({ locations, selected, onChange, placeholder = "Sel
         <div style={{ position: "absolute", zIndex: 200, top: "calc(100% + 4px)", left: 0, minWidth: 220, width: "100%", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, boxShadow: "0 6px 20px #0006", padding: 8 }}>
           <input autoFocus type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search locations…"
             style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 5, color: C.text, fontFamily: "inherit", fontSize: 12, padding: "5px 8px", outline: "none", boxSizing: "border-box", marginBottom: 6 }} />
+          {/* Select All / Clear All row */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 6, paddingBottom: 6, borderBottom: `1px solid ${C.border}` }}>
+            <button
+              onClick={() => { const n = new Set(selected); filtered.forEach(l => n.add(l)); onChange(n); }}
+              style={{ flex: 1, background: allSelected ? C.accentDim : "transparent", border: `1px solid ${C.border}`, borderRadius: 4, color: C.accent, fontFamily: "inherit", fontSize: 11, fontWeight: 700, padding: "3px 0", cursor: "pointer" }}>
+              Select All
+            </button>
+            <button
+              onClick={() => { const n = new Set(selected); filtered.forEach(l => n.delete(l)); onChange(n); }}
+              style={{ flex: 1, background: "transparent", border: `1px solid ${C.border}`, borderRadius: 4, color: C.muted, fontFamily: "inherit", fontSize: 11, fontWeight: 700, padding: "3px 0", cursor: "pointer" }}>
+              Clear
+            </button>
+          </div>
           <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 4px", cursor: "pointer", borderRadius: 4 }}>
             <input type="checkbox" checked={selected.size === 0} onChange={() => onChange(new Set())} style={{ accentColor: C.muted }} />
             <span style={{ color: C.muted, fontSize: 12, fontStyle: "italic" }}>No specific location</span>
@@ -786,22 +800,208 @@ const Select = ({ value, onChange, children, style: extra }) => (
   </select>
 );
 
+// ── Snake game easter egg ─────────────────────────────────────────────────────
+function SnakeGame({ onClose }) {
+  const CELL = 10, COLS = 20, ROWS = 20;
+  const canvasRef = useRef();
+  // All mutable game state lives in a ref so the interval callback always sees fresh values
+  const stateRef = useRef({
+    snake: [{ x: 10, y: 10 }, { x: 9, y: 10 }, { x: 8, y: 10 }],
+    dir: { x: 1, y: 0 }, nextDir: { x: 1, y: 0 },
+    food: { x: 4, y: 4 }, score: 0, gameOver: false, started: false,
+  });
+  const [display, setDisplay] = useState({ score: 0, gameOver: false, started: false });
+  const [leaderboard, setLeaderboard] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("ordergen_snake_lb") || "[]"); } catch { return []; }
+  });
+  const loopRef = useRef(null);
+
+  const randomFood = (snake) => {
+    let pos;
+    do { pos = { x: Math.floor(Math.random() * COLS), y: Math.floor(Math.random() * ROWS) }; }
+    while (snake.some(s => s.x === pos.x && s.y === pos.y));
+    return pos;
+  };
+
+  const draw = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const st = stateRef.current;
+    // Background
+    ctx.fillStyle = "#0f1117";
+    ctx.fillRect(0, 0, COLS * CELL, ROWS * CELL);
+    // Grid dots
+    ctx.fillStyle = "#1e2335";
+    for (let x = 0; x < COLS; x++) for (let y = 0; y < ROWS; y++) ctx.fillRect(x * CELL + 4, y * CELL + 4, 2, 2);
+    // Food
+    ctx.fillStyle = "#e74c3c";
+    ctx.beginPath();
+    ctx.arc(st.food.x * CELL + CELL / 2, st.food.y * CELL + CELL / 2, CELL / 2 - 1, 0, Math.PI * 2);
+    ctx.fill();
+    // Snake
+    st.snake.forEach((seg, i) => {
+      ctx.fillStyle = i === 0 ? "#4f8ef7" : i % 2 === 0 ? "#2a4a8a" : "#1e3570";
+      const r = i === 0 ? 3 : 2;
+      ctx.beginPath();
+      ctx.roundRect(seg.x * CELL + 1, seg.y * CELL + 1, CELL - 2, CELL - 2, r);
+      ctx.fill();
+    });
+    // Start screen
+    if (!st.started) {
+      ctx.fillStyle = "#0f1117cc";
+      ctx.fillRect(0, 0, COLS * CELL, ROWS * CELL);
+      ctx.fillStyle = "#4f8ef7";
+      ctx.font = "bold 13px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("Press Start", COLS * CELL / 2, ROWS * CELL / 2 - 6);
+      ctx.fillStyle = "#7a85a3";
+      ctx.font = "10px monospace";
+      ctx.fillText("Arrow keys or WASD", COLS * CELL / 2, ROWS * CELL / 2 + 10);
+    }
+  };
+
+  const endGame = () => {
+    const st = stateRef.current;
+    st.gameOver = true;
+    clearInterval(loopRef.current);
+    // Leaderboard
+    try {
+      const lb = JSON.parse(localStorage.getItem("ordergen_snake_lb") || "[]");
+      lb.push({ score: st.score, date: new Date().toLocaleDateString() });
+      lb.sort((a, b) => b.score - a.score);
+      const top = lb.slice(0, 5);
+      localStorage.setItem("ordergen_snake_lb", JSON.stringify(top));
+      setLeaderboard(top);
+    } catch {}
+    setDisplay({ score: st.score, gameOver: true, started: true });
+    // Draw overlay
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#0f1117bb";
+      ctx.fillRect(0, 0, COLS * CELL, ROWS * CELL);
+      ctx.fillStyle = "#e74c3c";
+      ctx.font = "bold 13px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("GAME OVER", COLS * CELL / 2, ROWS * CELL / 2 - 8);
+      ctx.fillStyle = "#e8ecf4";
+      ctx.font = "11px monospace";
+      ctx.fillText("Score: " + st.score, COLS * CELL / 2, ROWS * CELL / 2 + 8);
+    }
+  };
+
+  const tick = () => {
+    const st = stateRef.current;
+    if (st.gameOver) return;
+    st.dir = st.nextDir;
+    const head = { x: st.snake[0].x + st.dir.x, y: st.snake[0].y + st.dir.y };
+    if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS || st.snake.some(s => s.x === head.x && s.y === head.y)) {
+      endGame(); return;
+    }
+    const ate = head.x === st.food.x && head.y === st.food.y;
+    const newSnake = [head, ...st.snake];
+    if (!ate) newSnake.pop();
+    else { st.score++; st.food = randomFood(newSnake); }
+    st.snake = newSnake;
+    draw();
+    setDisplay(d => ({ ...d, score: st.score }));
+  };
+
+  const startGame = () => {
+    const st = stateRef.current;
+    st.snake = [{ x: 10, y: 10 }, { x: 9, y: 10 }, { x: 8, y: 10 }];
+    st.dir = { x: 1, y: 0 }; st.nextDir = { x: 1, y: 0 };
+    st.food = randomFood(st.snake);
+    st.score = 0; st.gameOver = false; st.started = true;
+    setDisplay({ score: 0, gameOver: false, started: true });
+    clearInterval(loopRef.current);
+    loopRef.current = setInterval(tick, 120);
+    draw();
+  };
+
+  useEffect(() => { draw(); return () => clearInterval(loopRef.current); }, []);// eslint-disable-line
+
+  useEffect(() => {
+    const handler = (e) => {
+      const st = stateRef.current;
+      if (!st.started || st.gameOver) return;
+      const D = { ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 }, ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 }, w: { x: 0, y: -1 }, s: { x: 0, y: 1 }, a: { x: -1, y: 0 }, d: { x: 1, y: 0 } };
+      const nd = D[e.key];
+      if (nd) { e.preventDefault(); if (nd.x !== -st.dir.x || nd.y !== -st.dir.y) st.nextDir = nd; }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  const medals = ["🥇", "🥈", "🥉", "4.", "5."];
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px", marginBottom: 24, display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap" }}>
+      <div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <span style={{ color: C.accent, fontWeight: 800, fontSize: 13, fontFamily: "monospace" }}>🐍 SNAKE &nbsp;·&nbsp; Score: {display.score}</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 2px" }} title="Close">✕</button>
+        </div>
+        <canvas ref={canvasRef} width={COLS * CELL} height={ROWS * CELL}
+          style={{ display: "block", borderRadius: 6, border: `1px solid ${C.border}`, imageRendering: "pixelated" }} />
+        <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+          <button onClick={startGame} style={{ background: C.accent, border: "none", borderRadius: 5, color: "#fff", fontFamily: "inherit", fontWeight: 700, fontSize: 12, padding: "5px 14px", cursor: "pointer" }}>
+            {display.started ? "↺ Restart" : "▶ Start"}
+          </button>
+          {display.gameOver && <span style={{ color: C.red, fontSize: 11, fontWeight: 700 }}>Game over!</span>}
+          {!display.gameOver && display.started && <span style={{ color: C.muted, fontSize: 11 }}>Arrow keys / WASD</span>}
+          {!display.started && <span style={{ color: C.muted, fontSize: 11 }}>Arrow keys / WASD</span>}
+        </div>
+      </div>
+      <div style={{ minWidth: 130 }}>
+        <div style={{ color: C.muted, fontWeight: 700, fontSize: 11, marginBottom: 10, letterSpacing: 1 }}>🏆 LEADERBOARD</div>
+        {leaderboard.length === 0
+          ? <div style={{ color: C.muted, fontSize: 11, fontStyle: "italic" }}>No scores yet</div>
+          : <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              {leaderboard.map((entry, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={{ fontSize: 12, minWidth: 20 }}>{medals[i]}</span>
+                  <span style={{ color: i === 0 ? C.accent : C.text, fontSize: 13, fontWeight: 700, fontFamily: "monospace", minWidth: 28 }}>{entry.score}</span>
+                  <span style={{ color: C.muted, fontSize: 10 }}>{entry.date}</span>
+                </div>
+              ))}
+            </div>
+        }
+      </div>
+    </div>
+  );
+}
+
 // ── step bar ──────────────────────────────────────────────────────────────────
 const STEPS_UPLOAD = ["Upload", "Map Columns", "Unit of Measure", "Review Order", "Export"];
 const STEPS_MANUAL = ["Upload", "Build Order", "Review Order", "Export"];
 // Map step number → display index for manual mode (steps 0,1,3,4 → 0,1,2,3)
 const manualStepIndex = { 0: 0, 1: 1, 3: 2, 4: 3 };
-const StepBar = ({ current, buildMode }) => {
+const StepBar = ({ current, buildMode, onReviewTripleClick }) => {
   const steps = buildMode === "manual" ? STEPS_MANUAL : STEPS_UPLOAD;
   const idx = buildMode === "manual" ? (manualStepIndex[current] ?? 0) : current;
+  const clickTimesRef = useRef([]);
+  const handleCircleClick = (stepLabel) => {
+    if (stepLabel !== "Review Order" || !onReviewTripleClick) return;
+    const now = Date.now();
+    const times = [...clickTimesRef.current, now].slice(-3);
+    clickTimesRef.current = times;
+    if (times.length === 3 && (now - times[0]) < 700) {
+      clickTimesRef.current = [];
+      onReviewTripleClick();
+    }
+  };
   return (
     <div style={{ display: "flex", gap: 0, marginBottom: 36 }}>
       {steps.map((s, i) => {
         const done = i < idx, active = i === idx;
+        const isReview = s === "Review Order";
         return (
           <div key={s} style={{ display: "flex", alignItems: "center", flex: i < steps.length - 1 ? 1 : "none" }}>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-              <div style={{ width: 32, height: 32, borderRadius: "50%", border: `2px solid ${done ? C.green : active ? C.accent : C.border}`, background: done ? C.green + "22" : active ? C.accent + "22" : "transparent", color: done ? C.green : active ? C.accent : C.muted, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13, transition: "all .3s" }}>
+              <div
+                onClick={() => handleCircleClick(s)}
+                style={{ width: 32, height: 32, borderRadius: "50%", border: `2px solid ${done ? C.green : active ? C.accent : C.border}`, background: done ? C.green + "22" : active ? C.accent + "22" : "transparent", color: done ? C.green : active ? C.accent : C.muted, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13, transition: "all .3s", cursor: isReview ? "pointer" : "default", userSelect: "none" }}>
                 {done ? "✓" : i + 1}
               </div>
               <span style={{ fontSize: 11, color: active ? C.accent : done ? C.green : C.muted, fontWeight: active ? 700 : 400, whiteSpace: "nowrap" }}>{s}</span>
@@ -4351,6 +4551,7 @@ export default function App() {
   const [savedPendingOrders, setSavedPendingOrders] = useState([]);
   const [manualBuiltRows, setManualBuiltRows] = useState(null); // rows from ManualBuildStep
   const [manualLocations, setManualLocations] = useState([]); // location list from manual build
+  const [snakeOpen, setSnakeOpen] = useState(false);
   // Session memory: full MapStep state so Back doesn't reset the form
   const [savedMapState, setSavedMapState] = useState(null);
 
@@ -4451,7 +4652,8 @@ export default function App() {
         )}
       </div>
       <div style={{ maxWidth: 1040, margin: "0 auto", padding: "0 24px" }}>
-        <StepBar current={step} buildMode={buildMode} />
+        <StepBar current={step} buildMode={buildMode} onReviewTripleClick={() => setSnakeOpen(v => !v)} />
+        {snakeOpen && <SnakeGame onClose={() => setSnakeOpen(false)} />}
         {step === 0 && <UploadStep onData={handleFileUploaded} onManualBuild={() => { setBuildMode("manual"); setStep(1); }} />}
         {step === 1 && buildMode === "manual" && (
           <ManualBuildStep onConfirm={handleManualBuildConfirm} onBack={() => { setBuildMode("upload"); setStep(0); }} />
