@@ -830,8 +830,18 @@ const Select = ({ value, onChange, children, style: extra }) => (
 );
 
 // ── Snake game easter egg ─────────────────────────────────────────────────────
+const SNAKE_SIZES = [
+  { label: "Tiny  — 200×200",  cell: 10 },
+  { label: "Small  — 240×240", cell: 12 },
+  { label: "Medium — 320×320", cell: 16 },
+  { label: "Large  — 400×400", cell: 20 },
+  { label: "XL     — 480×480", cell: 24 },
+];
 function SnakeGame({ onClose }) {
-  const CELL = 16, COLS = 20, ROWS = 20;
+  const COLS = 20, ROWS = 20;
+  const [cellSize, setCellSize] = useState(16);
+  const cellRef = useRef(16); // always fresh in interval callbacks
+  useEffect(() => { cellRef.current = cellSize; draw(); }, [cellSize]); // eslint-disable-line
   const canvasRef = useRef();
   // All mutable game state lives in a ref so the interval callback always sees fresh values
   const stateRef = useRef({
@@ -857,36 +867,38 @@ function SnakeGame({ onClose }) {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     const st = stateRef.current;
+    const CS = cellRef.current;
     // Background
     ctx.fillStyle = "#0f1117";
-    ctx.fillRect(0, 0, COLS * CELL, ROWS * CELL);
+    ctx.fillRect(0, 0, COLS * CS, ROWS * CS);
     // Grid dots
     ctx.fillStyle = "#1e2335";
-    for (let x = 0; x < COLS; x++) for (let y = 0; y < ROWS; y++) ctx.fillRect(x * CELL + 4, y * CELL + 4, 2, 2);
+    const dot = Math.floor(CS * 0.4);
+    for (let x = 0; x < COLS; x++) for (let y = 0; y < ROWS; y++) ctx.fillRect(x * CS + dot, y * CS + dot, 2, 2);
     // Food
     ctx.fillStyle = "#e74c3c";
     ctx.beginPath();
-    ctx.arc(st.food.x * CELL + CELL / 2, st.food.y * CELL + CELL / 2, CELL / 2 - 1, 0, Math.PI * 2);
+    ctx.arc(st.food.x * CS + CS / 2, st.food.y * CS + CS / 2, CS / 2 - 1, 0, Math.PI * 2);
     ctx.fill();
     // Snake
     st.snake.forEach((seg, i) => {
       ctx.fillStyle = i === 0 ? "#4f8ef7" : i % 2 === 0 ? "#2a4a8a" : "#1e3570";
-      const r = i === 0 ? 3 : 2;
+      const r = i === 0 ? Math.max(2, CS / 4) : Math.max(1, CS / 6);
       ctx.beginPath();
-      ctx.roundRect(seg.x * CELL + 1, seg.y * CELL + 1, CELL - 2, CELL - 2, r);
+      ctx.roundRect(seg.x * CS + 1, seg.y * CS + 1, CS - 2, CS - 2, r);
       ctx.fill();
     });
     // Start screen
     if (!st.started) {
       ctx.fillStyle = "#0f1117cc";
-      ctx.fillRect(0, 0, COLS * CELL, ROWS * CELL);
+      ctx.fillRect(0, 0, COLS * CS, ROWS * CS);
       ctx.fillStyle = "#4f8ef7";
       ctx.font = "bold 13px monospace";
       ctx.textAlign = "center";
-      ctx.fillText("Press Start", COLS * CELL / 2, ROWS * CELL / 2 - 6);
+      ctx.fillText("Press Start", COLS * CS / 2, ROWS * CS / 2 - 6);
       ctx.fillStyle = "#7a85a3";
       ctx.font = "10px monospace";
-      ctx.fillText("Arrow keys or WASD", COLS * CELL / 2, ROWS * CELL / 2 + 10);
+      ctx.fillText("Arrow keys or WASD", COLS * CS / 2, ROWS * CS / 2 + 10);
     }
   };
 
@@ -908,15 +920,16 @@ function SnakeGame({ onClose }) {
     const canvas = canvasRef.current;
     if (canvas) {
       const ctx = canvas.getContext("2d");
+      const CS = cellRef.current;
       ctx.fillStyle = "#0f1117bb";
-      ctx.fillRect(0, 0, COLS * CELL, ROWS * CELL);
+      ctx.fillRect(0, 0, COLS * CS, ROWS * CS);
       ctx.fillStyle = "#e74c3c";
       ctx.font = "bold 13px monospace";
       ctx.textAlign = "center";
-      ctx.fillText("GAME OVER", COLS * CELL / 2, ROWS * CELL / 2 - 8);
+      ctx.fillText("GAME OVER", COLS * CS / 2, ROWS * CS / 2 - 8);
       ctx.fillStyle = "#e8ecf4";
       ctx.font = "11px monospace";
-      ctx.fillText("Score: " + st.score, COLS * CELL / 2, ROWS * CELL / 2 + 8);
+      ctx.fillText("Score: " + st.score, COLS * CS / 2, ROWS * CS / 2 + 8);
     }
   };
 
@@ -1032,27 +1045,37 @@ function SnakeGame({ onClose }) {
       <div style={{ width: "fit-content", margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
 
         {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: COLS * CELL }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: COLS * cellSize }}>
           <span style={{ color: C.accent, fontWeight: 800, fontSize: 13, fontFamily: "monospace" }}>🐍 SNAKE · {display.score}</span>
           <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 2px" }}>✕</button>
         </div>
 
         {/* Canvas */}
-        <canvas ref={canvasRef} width={COLS * CELL} height={ROWS * CELL}
+        <canvas ref={canvasRef} width={COLS * cellSize} height={ROWS * CELL}
           style={{ display: "block", borderRadius: 6, border: `1px solid ${C.border}`, imageRendering: "pixelated", touchAction: "none" }} />
 
         {/* Start button */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", width: COLS * CELL }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", width: COLS * cellSize }}>
           <button onClick={startGame} style={{ background: C.accent, border: "none", borderRadius: 5, color: "#fff", fontFamily: "inherit", fontWeight: 700, fontSize: 12, padding: "5px 12px", cursor: "pointer", whiteSpace: "nowrap" }}>
             {display.started ? "↺ Restart" : "▶ Start"}
           </button>
           {display.gameOver && <span style={{ color: C.red, fontSize: 11, fontWeight: 700 }}>Game over!</span>}
         </div>
         {/* Control mode toggle */}
-        <div style={{ display: "flex", gap: 4, width: COLS * CELL }}>
+        <div style={{ display: "flex", gap: 4, width: COLS * cellSize }}>
           {modeBtn("D-Pad",    ctrlMode === "dpad",     () => setCtrlMode("dpad"))}
           {modeBtn("Swipe",    ctrlMode === "swipe",    () => setCtrlMode("swipe"))}
           {modeBtn("Keyboard", ctrlMode === "keyboard", () => setCtrlMode("keyboard"))}
+        </div>
+        {/* Size selector */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, width: COLS * cellSize }}>
+          <span style={{ color: C.muted, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>Grid size:</span>
+          <select
+            value={cellSize}
+            onChange={e => { const v = Number(e.target.value); setCellSize(v); cellRef.current = v; }}
+            style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 5, color: C.text, fontFamily: "inherit", fontSize: 11, padding: "3px 6px", outline: "none", cursor: "pointer" }}>
+            {SNAKE_SIZES.map(s => <option key={s.cell} value={s.cell}>{s.label}</option>)}
+          </select>
         </div>
 
         {/* Control area */}
@@ -1064,7 +1087,7 @@ function SnakeGame({ onClose }) {
           </div>
         )}
         {ctrlMode === "swipe" && (
-          <div ref={swipeZoneRef} style={{ width: COLS * CELL, height: 154, background: C.card, border: `2px dashed ${C.border}`, borderRadius: 10, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", touchAction: "none", userSelect: "none", gap: 6, cursor: "default" }}>
+          <div ref={swipeZoneRef} style={{ width: COLS * cellSize, height: 154, background: C.card, border: `2px dashed ${C.border}`, borderRadius: 10, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", touchAction: "none", userSelect: "none", gap: 6, cursor: "default" }}>
             <span style={{ fontSize: 28, lineHeight: 1 }}>👆</span>
             <span style={{ color: C.muted, fontSize: 12 }}>Swipe here to steer</span>
             <span style={{ color: C.border, fontSize: 10 }}>↑ ↓ ← →</span>
@@ -1073,7 +1096,7 @@ function SnakeGame({ onClose }) {
 
         {/* Leaderboard */}
         {leaderboard.length > 0 && (
-          <div style={{ width: COLS * CELL, borderTop: `1px solid ${C.border}`, paddingTop: 10, marginTop: 2 }}>
+          <div style={{ width: COLS * cellSize, borderTop: `1px solid ${C.border}`, paddingTop: 10, marginTop: 2 }}>
             <div style={{ color: C.muted, fontWeight: 700, fontSize: 10, letterSpacing: 1, marginBottom: 8 }}>🏆 LEADERBOARD</div>
             {/* Top 3 — centered row */}
             <div style={{ display: "flex", justifyContent: "center", gap: 14, marginBottom: leaderboard.length > 3 ? 8 : 0 }}>
