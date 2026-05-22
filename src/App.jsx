@@ -138,20 +138,49 @@ function OrderCalloutCard({ title, accentColor, theRows, mode, setMode, n, setN,
 function LocationMultiSelect({ locations, selected, onChange, placeholder = "Select locations…" }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [btnWidth, setBtnWidth] = useState(200);
   const ref = useRef();
+  const btnRef = useRef();
+  const measureCtxRef = useRef(null);
   useEffect(() => {
     if (!open) return;
     const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
+  useEffect(() => {
+    if (!btnRef.current) return;
+    const ro = new ResizeObserver(entries => setBtnWidth(entries[0].contentRect.width));
+    ro.observe(btnRef.current);
+    return () => ro.disconnect();
+  }, []);
+  const getCtx = () => {
+    if (!measureCtxRef.current) {
+      measureCtxRef.current = document.createElement("canvas").getContext("2d");
+      measureCtxRef.current.font = "13px system-ui, sans-serif";
+    }
+    return measureCtxRef.current;
+  };
   const filtered = locations.filter(l => l.toLowerCase().includes(search.toLowerCase()));
   const toggle = (loc) => { const n = new Set(selected); n.has(loc) ? n.delete(loc) : n.add(loc); onChange(n); };
-  const label = selected.size === 0 ? placeholder : [...selected].slice(0, 2).join(", ") + (selected.size > 2 ? ` +${selected.size - 2}` : "");
+  const getLabel = () => {
+    if (selected.size === 0) return placeholder;
+    const items = [...selected];
+    const ctx = getCtx();
+    const available = btnWidth - 44; // subtract arrow + padding
+    let best = items[0];
+    for (let k = 1; k <= items.length; k++) {
+      const candidate = items.slice(0, k).join(", ") + (items.length - k > 0 ? ` +${items.length - k}` : "");
+      if (ctx.measureText(candidate).width <= available) best = candidate;
+      else break;
+    }
+    return best;
+  };
+  const label = getLabel();
   const allSelected = filtered.length > 0 && filtered.every(l => selected.has(l));
   return (
     <div ref={ref} style={{ position: "relative" }}>
-      <button onClick={() => setOpen(x => !x)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: C.surface, border: `1px solid ${selected.size > 0 ? C.accent : C.border}`, borderRadius: 6, color: selected.size > 0 ? C.accent : C.muted, fontFamily: "inherit", fontSize: 13, padding: "6px 10px", cursor: "pointer", gap: 8 }}>
+      <button ref={btnRef} onClick={() => setOpen(x => !x)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: C.surface, border: `1px solid ${selected.size > 0 ? C.accent : C.border}`, borderRadius: 6, color: selected.size > 0 ? C.accent : C.muted, fontFamily: "inherit", fontSize: 13, padding: "6px 10px", cursor: "pointer", gap: 8 }}>
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, textAlign: "left" }}>{label}</span>
         <span style={{ fontSize: 10, flexShrink: 0 }}>{open ? "▲" : "▼"}</span>
       </button>
@@ -305,25 +334,25 @@ function ManualBuildStep({ onConfirm, onBack }) {
             <span style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>Order Items <span style={{ color: C.muted, fontSize: 12, fontWeight: 400 }}>({orderEntries.length} row{orderEntries.length !== 1 ? "s" : ""})</span></span>
             <Btn small variant="danger" onClick={() => setOrderEntries([])}>Clear All</Btn>
           </div>
-          <div style={{ overflowY: "auto", maxHeight: 400 }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "inherit" }}>
+          <div style={{ overflowY: "auto", maxHeight: 400, display: "flex", justifyContent: "center" }}>
+            <table style={{ borderCollapse: "collapse", fontFamily: "inherit", width: "auto", minWidth: 400 }}>
               <thead style={{ position: "sticky", top: 0, background: C.card }}>
                 <tr>
                   {["PRODUCT", "LOCATION", "QTY", ""].map((h, i) => (
-                    <th key={i} style={{ padding: "8px 12px", textAlign: i === 2 ? "right" : "left", color: C.muted, fontSize: 11, fontWeight: 700 }}>{h}</th>
+                    <th key={i} style={{ padding: "8px 20px", textAlign: "center", color: C.muted, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {orderEntries.map(e => (
                   <tr key={e.id} style={{ borderTop: `1px solid ${C.border}` }}>
-                    <td style={{ padding: "6px 12px", color: C.text, fontSize: 13 }}>{e.product}</td>
-                    <td style={{ padding: "6px 12px", color: C.muted, fontSize: 12 }}>{e.location || <span style={{ fontStyle: "italic" }}>—</span>}</td>
-                    <td style={{ padding: "6px 12px", textAlign: "right" }}>
+                    <td style={{ padding: "6px 20px", color: C.text, fontSize: 13, textAlign: "center" }}>{e.product}</td>
+                    <td style={{ padding: "6px 20px", color: C.muted, fontSize: 12, textAlign: "center" }}>{e.location || <span style={{ fontStyle: "italic" }}>—</span>}</td>
+                    <td style={{ padding: "6px 20px", textAlign: "center" }}>
                       <DraftInput value={e.qty} onCommit={v => setOrderEntries(prev => prev.map(x => x.id === e.id ? { ...x, qty: Number(v) } : x))}
-                        style={{ width: 70, textAlign: "right", background: C.card, border: `1px solid ${C.border}`, borderRadius: 4, color: C.accent, fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "2px 6px", outline: "none" }} />
+                        style={{ width: 70, textAlign: "center", background: C.card, border: `1px solid ${C.border}`, borderRadius: 4, color: C.accent, fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "2px 6px", outline: "none" }} />
                     </td>
-                    <td style={{ padding: "6px 8px", textAlign: "center" }}>
+                    <td style={{ padding: "6px 12px", textAlign: "center" }}>
                       <button onClick={() => setOrderEntries(prev => prev.filter(x => x.id !== e.id))} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 14, padding: 0 }}>✕</button>
                     </td>
                   </tr>
@@ -940,7 +969,7 @@ function SnakeGame({ onClose }) {
     return () => window.removeEventListener("keydown", handler);
   }, []);// eslint-disable-line
 
-  // Swipe detection on canvas
+  // Touch detection (canvas swipe — always on)
   const touchStartRef = useRef(null);
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -949,10 +978,9 @@ function SnakeGame({ onClose }) {
     const onEnd = (e) => {
       if (!touchStartRef.current) return;
       const t = e.changedTouches[0];
-      const dx = t.clientX - touchStartRef.current.x;
-      const dy = t.clientY - touchStartRef.current.y;
+      const dx = t.clientX - touchStartRef.current.x, dy = t.clientY - touchStartRef.current.y;
       touchStartRef.current = null;
-      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return; // too short
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
       if (Math.abs(dx) > Math.abs(dy)) steer({ x: dx > 0 ? 1 : -1, y: 0 });
       else steer({ x: 0, y: dy > 0 ? 1 : -1 });
       e.preventDefault();
@@ -962,52 +990,99 @@ function SnakeGame({ onClose }) {
     return () => { canvas.removeEventListener("touchstart", onStart); canvas.removeEventListener("touchend", onEnd); };
   }, []);// eslint-disable-line
 
+  // Swipe zone (big dedicated touch area, shown when swipeMode = true)
+  const [swipeMode, setSwipeMode] = useState(false);
+  const swipeZoneRef = useRef(null);
+  useEffect(() => {
+    const zone = swipeZoneRef.current;
+    if (!zone || !swipeMode) return;
+    const onStart = (e) => { const t = e.touches[0]; touchStartRef.current = { x: t.clientX, y: t.clientY }; e.preventDefault(); };
+    const onEnd = (e) => {
+      if (!touchStartRef.current) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - touchStartRef.current.x, dy = t.clientY - touchStartRef.current.y;
+      touchStartRef.current = null;
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      if (Math.abs(dx) > Math.abs(dy)) steer({ x: dx > 0 ? 1 : -1, y: 0 });
+      else steer({ x: 0, y: dy > 0 ? 1 : -1 });
+      e.preventDefault();
+    };
+    zone.addEventListener("touchstart", onStart, { passive: false });
+    zone.addEventListener("touchend", onEnd, { passive: false });
+    return () => { zone.removeEventListener("touchstart", onStart); zone.removeEventListener("touchend", onEnd); };
+  }, [swipeMode]);// eslint-disable-line
+
   const medals = ["🥇", "🥈", "🥉", "4.", "5."];
-  // D-pad button helper
-  const dBtn = (label, nd) => {
-    const s = { width: 44, height: 44, borderRadius: 8, background: C.card, border: `1px solid ${C.border}`, color: C.text, fontSize: 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", userSelect: "none", WebkitUserSelect: "none", touchAction: "manipulation", fontFamily: "inherit" };
-    return <button style={s} onPointerDown={(e) => { e.preventDefault(); steer(nd); }}>{label}</button>;
-  };
+  const dBtn = (lbl, nd) => (
+    <button
+      onPointerDown={(e) => { e.preventDefault(); steer(nd); }}
+      style={{ width: 48, height: 48, borderRadius: 8, background: C.card, border: `1px solid ${C.border}`, color: C.text, fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", userSelect: "none", WebkitUserSelect: "none", touchAction: "manipulation", fontFamily: "inherit" }}>
+      {lbl}
+    </button>
+  );
+  const modeBtn = (label, active, onClick) => (
+    <button onClick={onClick} style={{ flex: 1, padding: "4px 0", borderRadius: 5, fontFamily: "inherit", fontWeight: 700, fontSize: 11, cursor: "pointer", border: `1px solid ${active ? C.accent : C.border}`, background: active ? C.accent + "33" : "transparent", color: active ? C.accent : C.muted }}>
+      {label}
+    </button>
+  );
+
   return (
-    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px", marginBottom: 24 }}>
-      <div style={{ display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap", width: "fit-content", margin: "0 auto" }}>
-      <div>
-        <div style={{ display: "flex", gap: 40, alignItems: "center", justifyContent: "space-between", marginBottom: 8, minWidth: COLS * CELL }}>
-          <span style={{ color: C.accent, fontWeight: 800, fontSize: 13, fontFamily: "monospace" }}>🐍 SNAKE &nbsp;·&nbsp; Score: {display.score}</span>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 2px" }} title="Close">✕</button>
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 20px", marginBottom: 24 }}>
+      {/* Centered column */}
+      <div style={{ width: "fit-content", margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: COLS * CELL }}>
+          <span style={{ color: C.accent, fontWeight: 800, fontSize: 13, fontFamily: "monospace" }}>🐍 SNAKE · {display.score}</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 2px" }}>✕</button>
         </div>
+
+        {/* Canvas */}
         <canvas ref={canvasRef} width={COLS * CELL} height={ROWS * CELL}
           style={{ display: "block", borderRadius: 6, border: `1px solid ${C.border}`, imageRendering: "pixelated", touchAction: "none" }} />
-        <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
-          <button onClick={startGame} style={{ background: C.accent, border: "none", borderRadius: 5, color: "#fff", fontFamily: "inherit", fontWeight: 700, fontSize: 12, padding: "5px 14px", cursor: "pointer" }}>
+
+        {/* Start + mode toggle */}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", width: COLS * CELL }}>
+          <button onClick={startGame} style={{ background: C.accent, border: "none", borderRadius: 5, color: "#fff", fontFamily: "inherit", fontWeight: 700, fontSize: 12, padding: "5px 12px", cursor: "pointer", whiteSpace: "nowrap" }}>
             {display.started ? "↺ Restart" : "▶ Start"}
           </button>
           {display.gameOver && <span style={{ color: C.red, fontSize: 11, fontWeight: 700 }}>Game over!</span>}
-          {!display.gameOver && display.started && <span style={{ color: C.muted, fontSize: 11 }}>Arrow keys / WASD</span>}
-          {!display.started && <span style={{ color: C.muted, fontSize: 11 }}>Swipe or tap D-pad</span>}
+          <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
+            {modeBtn("D-Pad", !swipeMode, () => setSwipeMode(false))}
+            {modeBtn("Swipe", swipeMode, () => setSwipeMode(true))}
+          </div>
         </div>
-        {/* D-pad — always visible, critical on mobile */}
-        <div style={{ display: "grid", gridTemplateColumns: "44px 44px 44px", gridTemplateRows: "44px 44px 44px", gap: 5, marginTop: 12 }}>
-          <div />{dBtn("▲", { x: 0, y: -1 })}<div />
-          {dBtn("◄", { x: -1, y: 0 })}<div />{dBtn("►", { x: 1, y: 0 })}
-          <div />{dBtn("▼", { x: 0, y: 1 })}<div />
-        </div>
-      </div>
-      <div style={{ minWidth: 130 }}>
-        <div style={{ color: C.muted, fontWeight: 700, fontSize: 11, marginBottom: 10, letterSpacing: 1 }}>🏆 LEADERBOARD</div>
-        {leaderboard.length === 0
-          ? <div style={{ color: C.muted, fontSize: 11, fontStyle: "italic" }}>No scores yet</div>
-          : <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+
+        {/* D-Pad or Swipe Zone */}
+        {!swipeMode ? (
+          <div style={{ display: "grid", gridTemplateColumns: "48px 48px 48px", gridTemplateRows: "48px 48px 48px", gap: 5 }}>
+            <div />{dBtn("▲", { x: 0, y: -1 })}<div />
+            {dBtn("◄", { x: -1, y: 0 })}<div />{dBtn("►", { x: 1, y: 0 })}
+            <div />{dBtn("▼", { x: 0, y: 1 })}<div />
+          </div>
+        ) : (
+          <div ref={swipeZoneRef} style={{ width: COLS * CELL, height: 154, background: C.card, border: `2px dashed ${C.border}`, borderRadius: 10, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", touchAction: "none", userSelect: "none", gap: 6, cursor: "default" }}>
+            <span style={{ fontSize: 28, lineHeight: 1 }}>👆</span>
+            <span style={{ color: C.muted, fontSize: 12 }}>Swipe here to steer</span>
+            <span style={{ color: C.border, fontSize: 10 }}>↑ ↓ ← →</span>
+          </div>
+        )}
+
+        {/* Leaderboard */}
+        {leaderboard.length > 0 && (
+          <div style={{ width: COLS * CELL, borderTop: `1px solid ${C.border}`, paddingTop: 10, marginTop: 2 }}>
+            <div style={{ color: C.muted, fontWeight: 700, fontSize: 10, letterSpacing: 1, marginBottom: 6 }}>🏆 LEADERBOARD</div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               {leaderboard.map((entry, i) => (
-                <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <span style={{ fontSize: 12, minWidth: 20 }}>{medals[i]}</span>
-                  <span style={{ color: i === 0 ? C.accent : C.text, fontSize: 13, fontWeight: 700, fontFamily: "monospace", minWidth: 28 }}>{entry.score}</span>
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ fontSize: 11 }}>{medals[i]}</span>
+                  <span style={{ color: i === 0 ? C.accent : C.text, fontSize: 12, fontWeight: 700, fontFamily: "monospace" }}>{entry.score}</span>
                   <span style={{ color: C.muted, fontSize: 10 }}>{entry.date}</span>
                 </div>
               ))}
             </div>
-        }
-      </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -4593,6 +4668,7 @@ export default function App() {
   const [manualBuiltRows, setManualBuiltRows] = useState(null); // rows from ManualBuildStep
   const [manualLocations, setManualLocations] = useState([]); // location list from manual build
   const [snakeOpen, setSnakeOpen] = useState(false);
+  useEffect(() => { setSnakeOpen(false); }, [step]);
   // Session memory: full MapStep state so Back doesn't reset the form
   const [savedMapState, setSavedMapState] = useState(null);
 
