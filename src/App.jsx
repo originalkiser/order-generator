@@ -899,7 +899,7 @@ function SnakeGame({ onClose }) {
       const lb = JSON.parse(localStorage.getItem("ordergen_snake_lb") || "[]");
       lb.push({ score: st.score, date: new Date().toLocaleDateString() });
       lb.sort((a, b) => b.score - a.score);
-      const top = lb.slice(0, 5);
+      const top = lb.slice(0, 7);
       localStorage.setItem("ordergen_snake_lb", JSON.stringify(top));
       setLeaderboard(top);
     } catch {}
@@ -990,12 +990,12 @@ function SnakeGame({ onClose }) {
     return () => { canvas.removeEventListener("touchstart", onStart); canvas.removeEventListener("touchend", onEnd); };
   }, []);// eslint-disable-line
 
-  // Swipe zone (big dedicated touch area, shown when swipeMode = true)
-  const [swipeMode, setSwipeMode] = useState(false);
+  // Control mode: "dpad" | "swipe" | "keyboard"
+  const [ctrlMode, setCtrlMode] = useState("dpad");
   const swipeZoneRef = useRef(null);
   useEffect(() => {
     const zone = swipeZoneRef.current;
-    if (!zone || !swipeMode) return;
+    if (!zone || ctrlMode !== "swipe") return;
     const onStart = (e) => { const t = e.touches[0]; touchStartRef.current = { x: t.clientX, y: t.clientY }; e.preventDefault(); };
     const onEnd = (e) => {
       if (!touchStartRef.current) return;
@@ -1010,9 +1010,9 @@ function SnakeGame({ onClose }) {
     zone.addEventListener("touchstart", onStart, { passive: false });
     zone.addEventListener("touchend", onEnd, { passive: false });
     return () => { zone.removeEventListener("touchstart", onStart); zone.removeEventListener("touchend", onEnd); };
-  }, [swipeMode]);// eslint-disable-line
+  }, [ctrlMode]);// eslint-disable-line
 
-  const medals = ["🥇", "🥈", "🥉", "4.", "5."];
+  const medals = ["🥇", "🥈", "🥉", "4.", "5.", "6.", "7."];
   const dBtn = (lbl, nd) => (
     <button
       onPointerDown={(e) => { e.preventDefault(); steer(nd); }}
@@ -1048,19 +1048,21 @@ function SnakeGame({ onClose }) {
           </button>
           {display.gameOver && <span style={{ color: C.red, fontSize: 11, fontWeight: 700 }}>Game over!</span>}
           <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
-            {modeBtn("D-Pad", !swipeMode, () => setSwipeMode(false))}
-            {modeBtn("Swipe", swipeMode, () => setSwipeMode(true))}
+            {modeBtn("D-Pad",    ctrlMode === "dpad",     () => setCtrlMode("dpad"))}
+            {modeBtn("Swipe",    ctrlMode === "swipe",    () => setCtrlMode("swipe"))}
+            {modeBtn("Keyboard", ctrlMode === "keyboard", () => setCtrlMode("keyboard"))}
           </div>
         </div>
 
-        {/* D-Pad or Swipe Zone */}
-        {!swipeMode ? (
+        {/* Control area */}
+        {ctrlMode === "dpad" && (
           <div style={{ display: "grid", gridTemplateColumns: "48px 48px 48px", gridTemplateRows: "48px 48px 48px", gap: 5 }}>
             <div />{dBtn("▲", { x: 0, y: -1 })}<div />
             {dBtn("◄", { x: -1, y: 0 })}<div />{dBtn("►", { x: 1, y: 0 })}
             <div />{dBtn("▼", { x: 0, y: 1 })}<div />
           </div>
-        ) : (
+        )}
+        {ctrlMode === "swipe" && (
           <div ref={swipeZoneRef} style={{ width: COLS * CELL, height: 154, background: C.card, border: `2px dashed ${C.border}`, borderRadius: 10, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", touchAction: "none", userSelect: "none", gap: 6, cursor: "default" }}>
             <span style={{ fontSize: 28, lineHeight: 1 }}>👆</span>
             <span style={{ color: C.muted, fontSize: 12 }}>Swipe here to steer</span>
@@ -1071,16 +1073,29 @@ function SnakeGame({ onClose }) {
         {/* Leaderboard */}
         {leaderboard.length > 0 && (
           <div style={{ width: COLS * CELL, borderTop: `1px solid ${C.border}`, paddingTop: 10, marginTop: 2 }}>
-            <div style={{ color: C.muted, fontWeight: 700, fontSize: 10, letterSpacing: 1, marginBottom: 6 }}>🏆 LEADERBOARD</div>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              {leaderboard.map((entry, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <span style={{ fontSize: 11 }}>{medals[i]}</span>
-                  <span style={{ color: i === 0 ? C.accent : C.text, fontSize: 12, fontWeight: 700, fontFamily: "monospace" }}>{entry.score}</span>
-                  <span style={{ color: C.muted, fontSize: 10 }}>{entry.date}</span>
+            <div style={{ color: C.muted, fontWeight: 700, fontSize: 10, letterSpacing: 1, marginBottom: 8 }}>🏆 LEADERBOARD</div>
+            {/* Top 3 — centered row */}
+            <div style={{ display: "flex", justifyContent: "center", gap: 14, marginBottom: leaderboard.length > 3 ? 8 : 0 }}>
+              {leaderboard.slice(0, 3).map((entry, i) => (
+                <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                  <span style={{ fontSize: 16 }}>{medals[i]}</span>
+                  <span style={{ color: i === 0 ? C.accent : i === 1 ? C.text : C.muted, fontSize: 13, fontWeight: 800, fontFamily: "monospace" }}>{entry.score}</span>
+                  <span style={{ color: C.muted, fontSize: 9 }}>{entry.date}</span>
                 </div>
               ))}
             </div>
+            {/* 4–7 in 2×2 grid */}
+            {leaderboard.length > 3 && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
+                {leaderboard.slice(3).map((entry, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    <span style={{ color: C.muted, fontSize: 10, fontWeight: 700, minWidth: 14 }}>{medals[i + 3]}</span>
+                    <span style={{ color: C.text, fontSize: 11, fontWeight: 700, fontFamily: "monospace" }}>{entry.score}</span>
+                    <span style={{ color: C.muted, fontSize: 9 }}>{entry.date}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
