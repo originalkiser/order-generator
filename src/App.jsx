@@ -1746,6 +1746,88 @@ function DataSourcePanel({ onLoadData, onClose }) {
   );
 }
 
+// ── Template download ─────────────────────────────────────────────────────────
+function downloadTemplates() {
+  const wb = XLSX.utils.book_new();
+
+  const addSheet = (name, cols, examples, notes) => {
+    const headerRow   = cols.map(c => c.label);
+    const requiredRow = cols.map(c => c.required ? "★ Required" : "  Optional");
+    const descRow     = cols.map(c => c.desc || "");
+    const blankRow    = cols.map(() => "");
+    const data = [headerRow, requiredRow, descRow, blankRow, ...examples];
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    ws["!cols"] = cols.map(c => ({ wch: Math.max((c.label || "").length + 2, 22) }));
+    // Freeze top 3 rows so examples scroll under the header
+    ws["!freeze"] = { xSplit: 0, ySplit: 3 };
+    if (notes) {
+      ws["!sheetNotes"] = notes; // stored for reference, not rendered by SheetJS base
+    }
+    XLSX.utils.book_append_sheet(wb, ws, name);
+  };
+
+  // ── 1. Inventory / Main File ──────────────────────────────────────────────
+  addSheet("1 — Inventory File", [
+    { label: "Location",         required: true,  desc: "Store, warehouse, or site name/number" },
+    { label: "Product",          required: true,  desc: "Your internal item ID or SKU" },
+    { label: "On Hand",          required: true,  desc: "Current stock count (in on-hand units)" },
+    { label: "Lead Time (days)", required: true,  desc: "Days from order to receipt" },
+    { label: "Daily Usage",      required: false, desc: "Avg units consumed per day (or map Sales column instead)" },
+    { label: "Category",         required: false, desc: "Item category — enables filtering & UoM grouping" },
+    { label: "Cost (per unit)",  required: false, desc: "Unit cost — enables extended cost column in export" },
+    { label: "UOM",              required: false, desc: "On-hand unit of measure label (e.g. ea, cs, gal)" },
+    { label: "Min On Hand",      required: false, desc: "Minimum stock floor — order will never let stock drop below this" },
+    { label: "Max On Hand",      required: false, desc: "Maximum stock ceiling — order will be capped to stay below this" },
+  ], [
+    ["Store 1",  "ITEM-001", 50, 7,  5.2, "Chemicals", 12.50, "ea",  0,   200],
+    ["Store 1",  "ITEM-002", 12, 14, 1.8, "Parts",     45.00, "cs",  5,   50],
+    ["Store 2",  "ITEM-001", 30, 7,  5.2, "Chemicals", 12.50, "ea",  0,   200],
+    ["Store 2",  "ITEM-003",  0, 10, 3.0, "Parts",     18.75, "ea", 10,  100],
+  ]);
+
+  // ── 2. Pending Orders ─────────────────────────────────────────────────────
+  addSheet("2 — Pending Orders", [
+    { label: "Product",  required: true,  desc: "Must match Product values in your inventory file" },
+    { label: "Location", required: false, desc: "Leave blank if the pending order isn't location-specific" },
+    { label: "Qty",      required: true,  desc: "Quantity already on order (will be subtracted from suggested order)" },
+  ], [
+    ["ITEM-001", "Store 1", 24],
+    ["ITEM-002", "Store 1", 12],
+    ["ITEM-001", "Store 2",  6],
+    ["ITEM-003", "",        20],
+  ]);
+
+  // ── 3. Account Info ───────────────────────────────────────────────────────
+  addSheet("3 — Account Info", [
+    { label: "Location",    required: true,  desc: "Must match Location values in your inventory file. Leading zeros OK (023 matches 23)" },
+    { label: "Account #",   required: false, desc: "Example custom column — add any columns you want to pull into the export" },
+    { label: "Ship-To Name",required: false, desc: "Example: store or customer name" },
+    { label: "Address",     required: false, desc: "Example: street address" },
+    { label: "City",        required: false, desc: "Example: city" },
+    { label: "State",       required: false, desc: "Example: state/province" },
+    { label: "Phone",       required: false, desc: "Example: contact phone number" },
+  ], [
+    ["Store 1",  "ACC-001", "Main Street Store",  "123 Main St",   "Anytown",    "TX", "555-1234"],
+    ["023",      "ACC-023", "Oak Ave Location",   "456 Oak Ave",   "Othertown",  "TX", "555-5678"],
+    ["Store 2",  "ACC-002", "Warehouse North",    "789 Depot Rd",  "Somewhere",  "TX", "555-9999"],
+  ]);
+
+  // ── 4. Vendor / Part # Mapping ────────────────────────────────────────────
+  addSheet("4 — Vendor Part # Mapping", [
+    { label: "Internal Part #", required: true,  desc: "Your item ID — must match Product values in your inventory file" },
+    { label: "Vendor Part #",   required: true,  desc: "The vendor's item number to use on the export/order sheet" },
+    { label: "Description",     required: false, desc: "Optional — any extra columns can be mapped into the export" },
+    { label: "Pack Size",       required: false, desc: "Optional — units per case/pack (informational)" },
+    { label: "UOM",             required: false, desc: "Optional — vendor unit of measure" },
+  ], [
+    ["ITEM-001", "VND-7892-A", "Widget Assembly",   12, "cs"],
+    ["ITEM-002", "VND-4431",   "Gear Bracket",       1, "ea"],
+    ["ITEM-003", "VND-0081-B", "Mounting Plate Kit",  6, "cs"],
+  ]);
+
+  XLSX.writeFile(wb, "OrderGen_File_Templates.xlsx");
+}
+
 // ── STEP 1: Upload ────────────────────────────────────────────────────────────
 function UploadStep({ onData, onManualBuild }) {
   const [dragging, setDragging] = useState(false);
@@ -1844,6 +1926,17 @@ function UploadStep({ onData, onManualBuild }) {
           </button>
         </div>
       )}
+      {/* Template download */}
+      <div style={{ textAlign: "center", marginTop: 8 }}>
+        <button onClick={downloadTemplates}
+          style={{ background: "none", border: "none", color: C.muted, fontFamily: "inherit", fontSize: 12, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 6, transition: "color .2s" }}
+          onMouseEnter={e => e.currentTarget.style.color = C.accent}
+          onMouseLeave={e => e.currentTarget.style.color = C.muted}>
+          <span>📄</span>
+          <span>Download file templates</span>
+          <span style={{ fontSize: 10, opacity: 0.6 }}>— shows required &amp; optional columns for each upload type</span>
+        </button>
+      </div>
     </div>
   );
 }
