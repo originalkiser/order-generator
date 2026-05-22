@@ -956,10 +956,9 @@ function SnakeGame({ onClose }) {
     st.dir = { x: 1, y: 0 }; st.nextDir = { x: 1, y: 0 };
     st.food = randomFood(st.snake);
     st.score = 0; st.gameOver = false; st.started = true;
-    boostRef.current = false;
     setDisplay({ score: 0, gameOver: false, started: true });
     clearInterval(loopRef.current);
-    loopRef.current = setInterval(tick, NORMAL_SPEED);
+    loopRef.current = setInterval(tick, 120);
     draw();
   };
 
@@ -970,34 +969,14 @@ function SnakeGame({ onClose }) {
     if (nd.x !== -st.dir.x || nd.y !== -st.dir.y) st.nextDir = nd;
   };
 
-  // Speed boost — hold a direction key or D-pad button to go faster
-  const NORMAL_SPEED = 120, BOOST_SPEED = 38;
-  const boostRef = useRef(false);
-  const setSpeed = (boosted) => {
-    const st = stateRef.current;
-    if (!st.started || st.gameOver || boostRef.current === boosted) return;
-    boostRef.current = boosted;
-    clearInterval(loopRef.current);
-    loopRef.current = setInterval(tick, boosted ? BOOST_SPEED : NORMAL_SPEED);
-  };
-
   useEffect(() => { draw(); return () => clearInterval(loopRef.current); }, []);// eslint-disable-line
 
-  // Keyboard controls + hold-to-boost
-  const DIR_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "w", "a", "s", "d"]);
+  // Keyboard controls
   useEffect(() => {
     const D = { ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 }, ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 }, w: { x: 0, y: -1 }, s: { x: 0, y: 1 }, a: { x: -1, y: 0 }, d: { x: 1, y: 0 } };
-    const onDown = (e) => {
-      const nd = D[e.key];
-      if (!nd) return;
-      e.preventDefault();
-      steer(nd);
-      setSpeed(true); // first press starts boost; guard in setSpeed prevents re-creating interval on repeats
-    };
-    const onUp = (e) => { if (DIR_KEYS.has(e.key)) setSpeed(false); };
-    window.addEventListener("keydown", onDown);
-    window.addEventListener("keyup", onUp);
-    return () => { window.removeEventListener("keydown", onDown); window.removeEventListener("keyup", onUp); };
+    const handler = (e) => { const nd = D[e.key]; if (nd) { e.preventDefault(); steer(nd); } };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
   }, []);// eslint-disable-line
 
   // Touch detection (canvas swipe — always on)
@@ -1046,9 +1025,7 @@ function SnakeGame({ onClose }) {
   const medals = ["🥇", "🥈", "🥉", "4.", "5.", "6.", "7."];
   const dBtn = (lbl, nd) => (
     <button
-      onPointerDown={(e) => { e.preventDefault(); steer(nd); setSpeed(true); }}
-      onPointerUp={() => setSpeed(false)}
-      onPointerLeave={() => setSpeed(false)}
+      onPointerDown={(e) => { e.preventDefault(); steer(nd); }}
       style={{ width: 48, height: 48, borderRadius: 8, background: C.card, border: `1px solid ${C.border}`, color: C.text, fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", userSelect: "none", WebkitUserSelect: "none", touchAction: "manipulation", fontFamily: "inherit" }}>
       {lbl}
     </button>
