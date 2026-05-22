@@ -1051,7 +1051,7 @@ function SnakeGame({ onClose }) {
         </div>
 
         {/* Canvas */}
-        <canvas ref={canvasRef} width={COLS * cellSize} height={ROWS * CELL}
+        <canvas ref={canvasRef} width={COLS * cellSize} height={ROWS * cellSize}
           style={{ display: "block", borderRadius: 6, border: `1px solid ${C.border}`, imageRendering: "pixelated", touchAction: "none" }} />
 
         {/* Start button */}
