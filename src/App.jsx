@@ -1041,17 +1041,18 @@ function SnakeGame({ onClose }) {
         <canvas ref={canvasRef} width={COLS * CELL} height={ROWS * CELL}
           style={{ display: "block", borderRadius: 6, border: `1px solid ${C.border}`, imageRendering: "pixelated", touchAction: "none" }} />
 
-        {/* Start + mode toggle */}
+        {/* Start button */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", width: COLS * CELL }}>
           <button onClick={startGame} style={{ background: C.accent, border: "none", borderRadius: 5, color: "#fff", fontFamily: "inherit", fontWeight: 700, fontSize: 12, padding: "5px 12px", cursor: "pointer", whiteSpace: "nowrap" }}>
             {display.started ? "↺ Restart" : "▶ Start"}
           </button>
           {display.gameOver && <span style={{ color: C.red, fontSize: 11, fontWeight: 700 }}>Game over!</span>}
-          <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
-            {modeBtn("D-Pad",    ctrlMode === "dpad",     () => setCtrlMode("dpad"))}
-            {modeBtn("Swipe",    ctrlMode === "swipe",    () => setCtrlMode("swipe"))}
-            {modeBtn("Keyboard", ctrlMode === "keyboard", () => setCtrlMode("keyboard"))}
-          </div>
+        </div>
+        {/* Control mode toggle */}
+        <div style={{ display: "flex", gap: 4, width: COLS * CELL }}>
+          {modeBtn("D-Pad",    ctrlMode === "dpad",     () => setCtrlMode("dpad"))}
+          {modeBtn("Swipe",    ctrlMode === "swipe",    () => setCtrlMode("swipe"))}
+          {modeBtn("Keyboard", ctrlMode === "keyboard", () => setCtrlMode("keyboard"))}
         </div>
 
         {/* Control area */}
