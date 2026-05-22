@@ -831,7 +831,7 @@ const Select = ({ value, onChange, children, style: extra }) => (
 
 // ── Snake game easter egg ─────────────────────────────────────────────────────
 function SnakeGame({ onClose }) {
-  const CELL = 10, COLS = 20, ROWS = 20;
+  const CELL = 16, COLS = 20, ROWS = 20;
   const canvasRef = useRef();
   // All mutable game state lives in a ref so the interval callback always sees fresh values
   const stateRef = useRef({
