@@ -920,21 +920,54 @@ function SnakeGame({ onClose }) {
     draw();
   };
 
+  // Shared steer — called from keyboard, d-pad buttons, and swipe
+  const steer = (nd) => {
+    const st = stateRef.current;
+    if (!st.started || st.gameOver) return;
+    if (nd.x !== -st.dir.x || nd.y !== -st.dir.y) st.nextDir = nd;
+  };
+
   useEffect(() => { draw(); return () => clearInterval(loopRef.current); }, []);// eslint-disable-line
 
+  // Keyboard controls
   useEffect(() => {
     const handler = (e) => {
-      const st = stateRef.current;
-      if (!st.started || st.gameOver) return;
       const D = { ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 }, ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 }, w: { x: 0, y: -1 }, s: { x: 0, y: 1 }, a: { x: -1, y: 0 }, d: { x: 1, y: 0 } };
       const nd = D[e.key];
-      if (nd) { e.preventDefault(); if (nd.x !== -st.dir.x || nd.y !== -st.dir.y) st.nextDir = nd; }
+      if (nd) { e.preventDefault(); steer(nd); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, []);// eslint-disable-line
+
+  // Swipe detection on canvas
+  const touchStartRef = useRef(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onStart = (e) => { const t = e.touches[0]; touchStartRef.current = { x: t.clientX, y: t.clientY }; e.preventDefault(); };
+    const onEnd = (e) => {
+      if (!touchStartRef.current) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - touchStartRef.current.x;
+      const dy = t.clientY - touchStartRef.current.y;
+      touchStartRef.current = null;
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return; // too short
+      if (Math.abs(dx) > Math.abs(dy)) steer({ x: dx > 0 ? 1 : -1, y: 0 });
+      else steer({ x: 0, y: dy > 0 ? 1 : -1 });
+      e.preventDefault();
+    };
+    canvas.addEventListener("touchstart", onStart, { passive: false });
+    canvas.addEventListener("touchend", onEnd, { passive: false });
+    return () => { canvas.removeEventListener("touchstart", onStart); canvas.removeEventListener("touchend", onEnd); };
+  }, []);// eslint-disable-line
 
   const medals = ["🥇", "🥈", "🥉", "4.", "5."];
+  // D-pad button helper
+  const dBtn = (label, nd) => {
+    const s = { width: 44, height: 44, borderRadius: 8, background: C.card, border: `1px solid ${C.border}`, color: C.text, fontSize: 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", userSelect: "none", WebkitUserSelect: "none", touchAction: "manipulation", fontFamily: "inherit" };
+    return <button style={s} onPointerDown={(e) => { e.preventDefault(); steer(nd); }}>{label}</button>;
+  };
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px", marginBottom: 24, display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap" }}>
       <div>
@@ -943,14 +976,20 @@ function SnakeGame({ onClose }) {
           <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 2px" }} title="Close">✕</button>
         </div>
         <canvas ref={canvasRef} width={COLS * CELL} height={ROWS * CELL}
-          style={{ display: "block", borderRadius: 6, border: `1px solid ${C.border}`, imageRendering: "pixelated" }} />
+          style={{ display: "block", borderRadius: 6, border: `1px solid ${C.border}`, imageRendering: "pixelated", touchAction: "none" }} />
         <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
           <button onClick={startGame} style={{ background: C.accent, border: "none", borderRadius: 5, color: "#fff", fontFamily: "inherit", fontWeight: 700, fontSize: 12, padding: "5px 14px", cursor: "pointer" }}>
             {display.started ? "↺ Restart" : "▶ Start"}
           </button>
           {display.gameOver && <span style={{ color: C.red, fontSize: 11, fontWeight: 700 }}>Game over!</span>}
           {!display.gameOver && display.started && <span style={{ color: C.muted, fontSize: 11 }}>Arrow keys / WASD</span>}
-          {!display.started && <span style={{ color: C.muted, fontSize: 11 }}>Arrow keys / WASD</span>}
+          {!display.started && <span style={{ color: C.muted, fontSize: 11 }}>Swipe or tap D-pad</span>}
+        </div>
+        {/* D-pad — always visible, critical on mobile */}
+        <div style={{ display: "grid", gridTemplateColumns: "44px 44px 44px", gridTemplateRows: "44px 44px 44px", gap: 5, marginTop: 12 }}>
+          <div />{dBtn("▲", { x: 0, y: -1 })}<div />
+          {dBtn("◄", { x: -1, y: 0 })}<div />{dBtn("►", { x: 1, y: 0 })}
+          <div />{dBtn("▼", { x: 0, y: 1 })}<div />
         </div>
       </div>
       <div style={{ minWidth: 130 }}>
