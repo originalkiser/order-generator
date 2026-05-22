@@ -969,9 +969,10 @@ function SnakeGame({ onClose }) {
     return <button style={s} onPointerDown={(e) => { e.preventDefault(); steer(nd); }}>{label}</button>;
   };
   return (
-    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px", marginBottom: 24, display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap", justifyContent: "center" }}>
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px", marginBottom: 24 }}>
+      <div style={{ display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap", width: "fit-content", margin: "0 auto" }}>
       <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ display: "flex", gap: 40, alignItems: "center", justifyContent: "space-between", marginBottom: 8, minWidth: COLS * CELL }}>
           <span style={{ color: C.accent, fontWeight: 800, fontSize: 13, fontFamily: "monospace" }}>🐍 SNAKE &nbsp;·&nbsp; Score: {display.score}</span>
           <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 2px" }} title="Close">✕</button>
         </div>
@@ -1006,6 +1007,7 @@ function SnakeGame({ onClose }) {
               ))}
             </div>
         }
+      </div>
       </div>
     </div>
   );
