@@ -240,25 +240,98 @@ function ManualBuildStep({ onConfirm, onBack }) {
     setNewLocs(prev => { const n = new Set(prev); n.delete(loc); return n; });
   };
 
+  // ── product reference data (optional) ─────────────────────────────────────
+  const refFileRef = useRef();
+  const [refData, setRefData] = useState(null);
+  const [minDaysSupply, setMinDaysSupply] = useState(7);
+
+  const handleRefFile = (file) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+        if (json.length < 2) return;
+        const hdrs = json[0].map(h => String(h).trim());
+        const dataRows = json.slice(1).filter(r => r.some(c => String(c).trim() !== ""));
+        const norm = h => h.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const find = (...keys) => hdrs.findIndex(h => keys.includes(norm(h)));
+        const colMap = {
+          product:     find("product","item","sku","partno","internalid","itemid","itemno"),
+          on_hand:     find("onhand","oh","qtyoh","quantityonhand","invcurrentonhand"),
+          daily_usage: find("dailyusage","daily","usage","velocity","avgdailyusage","avgsales"),
+          leadtime:    find("leadtime","leaddays","lead","leadtimedays"),
+          min_on_hand: find("min","minimum","minonhand","reorderpoint","rop","reorder"),
+          max_on_hand: find("max","maximum","maxonhand","targetstock","maxstock"),
+          vendor:      find("vendor","supplier","distributor","vendorname","suppliername"),
+          cost:        find("cost","price","unitcost","unitprice"),
+        };
+        const lookup = new Map();
+        if (colMap.product >= 0) {
+          dataRows.forEach(r => {
+            const key = String(r[colMap.product] ?? "").trim().toLowerCase();
+            if (key) lookup.set(key, r);
+          });
+        }
+        setRefData({ headers: hdrs, rows: dataRows, colMap, lookup, fileName: file.name });
+      } catch {}
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const lookupRef = (product, field) => {
+    if (!refData || (refData.colMap[field] ?? -1) < 0) return "";
+    const row = refData.lookup.get(String(product ?? "").trim().toLowerCase());
+    if (!row) return "";
+    return String(row[refData.colMap[field]] ?? "").trim();
+  };
+
+  const autoSuggestQty = (prod) => {
+    const onHand = parseFloat(lookupRef(prod, "on_hand")) || 0;
+    const usage  = parseFloat(lookupRef(prod, "daily_usage")) || 0;
+    const lead   = parseFloat(lookupRef(prod, "leadtime")) || 0;
+    const maxOH  = parseFloat(lookupRef(prod, "max_on_hand"));
+    if (!isNaN(maxOH) && maxOH > 0) return Math.max(0, Math.ceil(maxOH - onHand));
+    if (usage > 0) return Math.max(0, Math.ceil(usage * (lead + minDaysSupply) - onHand));
+    return 0;
+  };
+
   const addProduct = () => {
     const prod = newProduct.trim();
     if (!prod) return;
-    const qty = newQty === "" ? 0 : Math.max(0, Number(newQty));
+    const qty = newQty !== "" ? Math.max(0, Number(newQty)) : (refData ? autoSuggestQty(prod) : 0);
     const targetLocs = newLocs.size > 0 ? [...newLocs] : [""];
     setOrderEntries(prev => [...prev, ...targetLocs.map(loc => ({ id: `${Date.now()}-${Math.random()}`, product: prod, location: loc, qty }))]);
     setNewProduct(""); setNewQty(""); setNewLocs(new Set());
   };
 
   const handleConfirm = () => {
-    const rows = orderEntries.map((e, i) => ({
-      _idx: i, product: e.product, location: e.location, order: e.qty,
-      daily_usage: "", on_hand: "", leadtime: "", category: "", cost: "", uom: "",
-      min_on_hand: "", max_on_hand: "", suggested: e.qty,
-      days_on_hand: null, est_on_hand_after: null, appliedRule: null,
-      uomConv: { onHandToOrderFactor: 1, orderToOnHandFactor: 1, isPack: false, packSize: 1, hasConversion: false },
-      _isTotal: false, _rawUsage: "", _minConstrained: false, _maxConstrained: false,
-      on_hand_uom: "", order_uom: "", units_ordered: null, _manuallyBuilt: true,
-    }));
+    const rows = orderEntries.map((e, i) => {
+      const onHand    = lookupRef(e.product, "on_hand");
+      const usage     = lookupRef(e.product, "daily_usage");
+      const lead      = lookupRef(e.product, "leadtime");
+      const minOH     = lookupRef(e.product, "min_on_hand");
+      const maxOH     = lookupRef(e.product, "max_on_hand");
+      const vendor    = lookupRef(e.product, "vendor");
+      const cost      = lookupRef(e.product, "cost");
+      const usageNum  = parseFloat(usage);
+      const onHandNum = parseFloat(onHand);
+      return {
+        _idx: i, product: e.product, location: e.location, order: e.qty,
+        daily_usage: usage, on_hand: onHand, leadtime: lead,
+        category: vendor || "", cost, uom: "",
+        min_on_hand: minOH, max_on_hand: maxOH,
+        suggested: e.qty,
+        days_on_hand: (!isNaN(usageNum) && usageNum > 0 && !isNaN(onHandNum)) ? onHandNum / usageNum : null,
+        est_on_hand_after: !isNaN(onHandNum) ? onHandNum + e.qty : null,
+        appliedRule: null,
+        uomConv: { onHandToOrderFactor: 1, orderToOnHandFactor: 1, isPack: false, packSize: 1, hasConversion: false },
+        _isTotal: false, _rawUsage: usage, _minConstrained: false, _maxConstrained: false,
+        on_hand_uom: "", order_uom: "", units_ordered: null, _manuallyBuilt: true,
+        vendor, _minDaysSupply: minDaysSupply,
+      };
+    });
     onConfirm(rows, locations);
   };
 
@@ -296,6 +369,49 @@ function ManualBuildStep({ onConfirm, onBack }) {
         )}
       </div>
 
+      {/* 1.5 — Optional product reference (min/max/usage/leadtime) */}
+      <input ref={refFileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }}
+        onChange={e => { if (e.target.files[0]) { handleRefFile(e.target.files[0]); e.target.value = ""; } }} />
+      <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${refData ? C.accent + "66" : C.border}`, padding: "16px 20px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <div>
+            <span style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>📋 Product Reference</span>
+            <span style={{ color: C.muted, fontSize: 12, marginLeft: 8 }}>optional — enables auto-suggested quantities, efficiency scoring</span>
+          </div>
+          {!refData ? (
+            <Btn small variant="ghost" onClick={() => refFileRef.current?.click()}>Upload Reference File</Btn>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ color: C.green, fontSize: 12, fontWeight: 700 }}>✓ {refData.fileName}</span>
+              <span style={{ color: C.muted, fontSize: 12 }}>{refData.rows.length} products</span>
+              <span style={{ color: C.muted, fontSize: 12 }}>
+                {["on_hand","daily_usage","leadtime","min_on_hand","max_on_hand","vendor"]
+                  .filter(f => (refData.colMap[f] ?? -1) >= 0)
+                  .map(f => ({ on_hand:"On Hand", daily_usage:"Usage", leadtime:"Lead Time", min_on_hand:"Min", max_on_hand:"Max", vendor:"Vendor" })[f])
+                  .join(" · ")}
+              </span>
+              <Btn small variant="danger" onClick={() => setRefData(null)}>Remove</Btn>
+            </div>
+          )}
+        </div>
+        {refData && (
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ color: C.muted, fontSize: 12 }}>Min days of supply target:</span>
+              <input type="number" min={1} max={365} value={minDaysSupply} onChange={e => setMinDaysSupply(Math.max(1, Number(e.target.value)))}
+                style={{ width: 64, background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, color: C.accent, fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "4px 8px", outline: "none", textAlign: "center" }} />
+              <span style={{ color: C.muted, fontSize: 12 }}>days</span>
+            </div>
+            <span style={{ color: C.muted, fontSize: 11 }}>Used when no qty is entered — auto-suggests order amounts per product</span>
+          </div>
+        )}
+        {!refData && (
+          <p style={{ color: C.muted, fontSize: 11, marginTop: 10, margin: "10px 0 0" }}>
+            Upload a file with columns like <em>Product, On Hand, Daily Usage, Lead Time, Min, Max, Vendor</em> — headers are detected automatically.
+          </p>
+        )}
+      </div>
+
       {/* 2 — Add Products */}
       <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, padding: "16px 20px" }}>
         <div style={{ color: C.text, fontWeight: 700, fontSize: 14, marginBottom: 14 }}>📦 Step 2 — Add Products</div>
@@ -325,6 +441,19 @@ function ManualBuildStep({ onConfirm, onBack }) {
         {newLocs.size > 1 && (
           <p style={{ color: C.accent, fontSize: 11, marginTop: 8, margin: "8px 0 0" }}>Will create {newLocs.size} rows (one per location) with quantity {newQty || 0} each</p>
         )}
+        {refData && newProduct.trim() && newQty === "" && (() => {
+          const suggested = autoSuggestQty(newProduct.trim());
+          const usage = lookupRef(newProduct.trim(), "daily_usage");
+          const lead = lookupRef(newProduct.trim(), "leadtime");
+          const maxOH = lookupRef(newProduct.trim(), "max_on_hand");
+          if (!refData.lookup.has(newProduct.trim().toLowerCase())) return <p style={{ color: C.muted, fontSize: 11, margin: "6px 0 0" }}>Product not found in reference — enter qty manually</p>;
+          return (
+            <p style={{ color: C.accent, fontSize: 11, margin: "6px 0 0" }}>
+              Auto-suggest: <strong>{suggested}</strong> units
+              {!isNaN(parseFloat(maxOH)) ? ` (fill to max ${maxOH})` : usage ? ` (${minDaysSupply}d supply + ${lead || 0}d lead)` : ""}
+            </p>
+          );
+        })()}
       </div>
 
       {/* 3 — Order list */}
@@ -2947,6 +3076,7 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
 
   const [rows, setRows] = useState(() => initialRows ?? buildRows(productRules, uomMappings, categoryUomSettings, prefixSuffixRules, [], loadUsageAdjustments(), loadIgnoreMax()));
   const [targetLocal, setTargetLocal] = useState(targetDays);
+  const [effMinDays, setEffMinDays] = useState(() => targetDays || 7);
   // colTextFilters: { [colKey]: string }  — type-in text filter
   // colCheckedFilters: { [colKey]: Set<string> }  — empty Set = show all; non-empty = show only checked
   const [colTextFilters, setColTextFilters] = useState({});
@@ -3558,6 +3688,88 @@ function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manual
 
       {/* top action bar */}
       <ActionBar />
+
+      {/* ── Efficiency & Days-of-Supply Panel ────────────────────────────────── */}
+      {(() => {
+        const usageRows = rows.filter(r => !r._isTotal && parseFloat(r.daily_usage) > 0);
+        if (usageRows.length === 0) return null;
+        const effData = usageRows.map(r => {
+          const usage   = parseFloat(r.daily_usage);
+          const lead    = parseFloat(r.leadtime) || 0;
+          const onHand  = parseFloat(r.on_hand) || 0;
+          const order   = Number(r.order) || 0;
+          const maxOH   = parseFloat(r.max_on_hand);
+          const recommended = !isNaN(maxOH) && maxOH > 0
+            ? Math.max(0, maxOH - onHand)
+            : Math.max(0, usage * (lead + effMinDays) - onHand);
+          const orderDays = usage > 0 ? order / usage : 0;
+          const eff = recommended <= 0 ? (order > 0 ? 50 : 100)
+            : order <= 0 ? 0
+            : Math.min(100, Math.round(Math.min(order, recommended) / recommended * 100));
+          return { recommended, orderDays, eff };
+        });
+        const avgDays = effData.reduce((s, d) => s + d.orderDays, 0) / effData.length;
+        const avgEff  = Math.round(effData.reduce((s, d) => s + d.eff, 0) / effData.length);
+        const effColor = avgEff >= 85 ? C.green : avgEff >= 60 ? C.orange : C.red;
+        const totalRec = usageRows.reduce((s, r, i) => s + effData[i].recommended, 0);
+        const totalOrd = usageRows.reduce((s, r) => s + (Number(r.order) || 0), 0);
+        const leadBasedDays = (() => {
+          const leaded = usageRows.filter(r => parseFloat(r.leadtime) > 0);
+          if (!leaded.length) return null;
+          return Math.round(leaded.reduce((s, r) => s + parseFloat(r.leadtime), 0) / leaded.length + effMinDays);
+        })();
+        return (
+          <div style={{ background: C.card, borderRadius: 12, border: `1px solid ${effColor}44`, padding: "16px 20px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 14 }}>
+              <div>
+                <span style={{ color: C.text, fontWeight: 800, fontSize: 14 }}>📊 Order Efficiency</span>
+                <span style={{ color: C.muted, fontSize: 12, marginLeft: 8 }}>{usageRows.length} product{usageRows.length !== 1 ? "s" : ""} with usage data</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ color: C.muted, fontSize: 12 }}>Target days:</span>
+                <input type="number" min={1} max={365} value={effMinDays} onChange={e => setEffMinDays(Math.max(1, Number(e.target.value)))}
+                  style={{ width: 56, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, color: C.accent, fontFamily: "inherit", fontSize: 13, fontWeight: 700, padding: "3px 7px", outline: "none", textAlign: "center" }} />
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {/* Efficiency % */}
+              <div style={{ flex: "1 1 130px", background: C.surface, borderRadius: 10, padding: "12px 16px", border: `1px solid ${effColor}66` }}>
+                <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>ORDER EFFICIENCY</div>
+                <div style={{ color: effColor, fontWeight: 800, fontSize: 28 }}>{avgEff}%</div>
+                <div style={{ marginTop: 6, height: 5, background: C.border, borderRadius: 3 }}>
+                  <div style={{ width: `${avgEff}%`, height: "100%", background: effColor, borderRadius: 3, transition: "width .3s" }} />
+                </div>
+                <div style={{ color: C.muted, fontSize: 10, marginTop: 5 }}>
+                  {avgEff >= 85 ? "Optimal" : avgEff >= 60 ? "Acceptable — consider adjusting qty" : "Under-supplied — review quantities"}
+                </div>
+              </div>
+              {/* Avg days covered */}
+              <div style={{ flex: "1 1 130px", background: C.surface, borderRadius: 10, padding: "12px 16px", border: `1px solid ${C.border}` }}>
+                <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>AVG DAYS COVERED</div>
+                <div style={{ color: C.accent, fontWeight: 800, fontSize: 28 }}>{avgDays.toFixed(1)}</div>
+                <div style={{ color: C.muted, fontSize: 10, marginTop: 5 }}>days of supply per product</div>
+              </div>
+              {/* Recommended total */}
+              <div style={{ flex: "1 1 130px", background: C.surface, borderRadius: 10, padding: "12px 16px", border: `1px solid ${C.border}` }}>
+                <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>CURRENT vs RECOMMENDED</div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                  <span style={{ color: C.text, fontWeight: 800, fontSize: 22 }}>{Math.round(totalOrd).toLocaleString()}</span>
+                  <span style={{ color: C.muted, fontSize: 11 }}>/ {Math.round(totalRec).toLocaleString()} rec.</span>
+                </div>
+                <div style={{ color: C.muted, fontSize: 10, marginTop: 5 }}>total units · based on {effMinDays}d target</div>
+              </div>
+              {/* Lead-time recommendation */}
+              {leadBasedDays && (
+                <div style={{ flex: "1 1 130px", background: C.surface, borderRadius: 10, padding: "12px 16px", border: `1px solid ${C.purple}44` }}>
+                  <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>LEAD-TIME OPTIMAL</div>
+                  <div style={{ color: C.purple, fontWeight: 800, fontSize: 22 }}>{leadBasedDays}d</div>
+                  <div style={{ color: C.muted, fontSize: 10, marginTop: 5 }}>recommended coverage based on avg lead time + {effMinDays}d buffer</div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* product rules panel */}
       {showRulesPanel && (
@@ -4409,6 +4621,12 @@ function ExportStep({ rows, onBack }) {
   const accountInfoFileRef = useRef();
   const [productInfo, setProductInfo] = useState(null);
   const productInfoFileRef = useRef();
+  // Vendor grouping
+  const [vendorGrouping, setVendorGrouping] = useState("none"); // "none" | "sheets" | "files"
+  const [vendorColSource, setVendorColSource] = useState("product"); // "product" | "account" | "data"
+  const [vendorColName, setVendorColName] = useState("");
+  const [vendorLayouts, setVendorLayouts] = useState({}); // { vendorName: cols[] } overrides
+  const [expandedVendorLayout, setExpandedVendorLayout] = useState(null);
 
   const handleAccountFile = (file) => {
     const reader = new FileReader();
@@ -4552,7 +4770,51 @@ function ExportStep({ rows, onBack }) {
     setCols(arr);
   };
 
+  // ── Vendor grouping helpers ────────────────────────────────────────────────
+  const getVendorForRow = (row) => {
+    if (vendorColSource === "data") return String(row.vendor || row.category || "Unknown");
+    if (vendorColSource === "product" && productInfo && vendorColName) {
+      const prodRow = productLookup.get(String(row.product ?? "").trim().toLowerCase());
+      if (!prodRow) return "Unknown";
+      const idx = productInfo.headers.indexOf(vendorColName);
+      return idx >= 0 && String(prodRow[idx] ?? "").trim() ? String(prodRow[idx]).trim() : "Unknown";
+    }
+    if (vendorColSource === "account" && accountInfo && vendorColName) {
+      const rawLoc = String(row.location ?? "").trim().toLowerCase();
+      const acctRow = accountLookup.get(rawLoc) ?? accountLookup.get(normLoc(rawLoc));
+      if (!acctRow) return "Unknown";
+      const idx = accountInfo.headers.indexOf(vendorColName);
+      return idx >= 0 && String(acctRow[idx] ?? "").trim() ? String(acctRow[idx]).trim() : "Unknown";
+    }
+    return "Unknown";
+  };
+
+  const doGroupedExport = () => {
+    const safeSheet = (name) => String(name).replace(/[:\\\/\?\*\[\]]/g, "_").slice(0, 31) || "Vendor";
+    const vendors = [...new Set(exportRows.map(r => getVendorForRow(r)))].filter(Boolean).sort();
+    if (vendorGrouping === "sheets") {
+      const wb = XLSX.utils.book_new();
+      vendors.forEach(vendor => {
+        const vRows = exportRows.filter(r => getVendorForRow(r) === vendor);
+        const vCols = vendorLayouts[vendor] || cols;
+        const data = [vCols.map(c => c.header || ""), ...vRows.map(r => vCols.map(c => resolveCell(c, r)))];
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(data), safeSheet(vendor));
+      });
+      XLSX.writeFile(wb, `${fileName || "order"}_by_vendor.xlsx`);
+    } else if (vendorGrouping === "files") {
+      vendors.forEach(vendor => {
+        const vRows = exportRows.filter(r => getVendorForRow(r) === vendor);
+        const vCols = vendorLayouts[vendor] || cols;
+        const data = [vCols.map(c => c.header || ""), ...vRows.map(r => vCols.map(c => resolveCell(c, r)))];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(data), sheetName || "Order");
+        XLSX.writeFile(wb, `${fileName || "order"}_${String(vendor).replace(/[^a-z0-9]/gi, "_")}.xlsx`);
+      });
+    }
+  };
+
   const doExport = () => {
+    if (vendorGrouping !== "none") { doGroupedExport(); return; }
     const hdrs = cols.map(c => c.header || "");
     const data = exportRows.map(r => cols.map(c => resolveCell(c, r)));
     const baseName = fileName || "order";
@@ -4679,6 +4941,135 @@ function ExportStep({ rows, onBack }) {
             </span>
           )}
         </div>
+      </div>
+
+      {/* ── Vendor grouping ──────────────────────────────────────────────────── */}
+      <div style={{ background: C.card, borderRadius: 12, border: `1px solid ${vendorGrouping !== "none" ? C.purple + "66" : C.border}`, padding: "18px 20px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+          <div>
+            <span style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>🗂 Group Export by Vendor</span>
+            <span style={{ color: C.muted, fontSize: 12, marginLeft: 8 }}>split the export into separate sheets or files per vendor</span>
+          </div>
+          <div style={{ display: "flex", gap: 5 }}>
+            {[["none","Single File"], ["sheets","Sheet per Vendor"], ["files","File per Vendor"]].map(([v, l]) => (
+              <button key={v} onClick={() => setVendorGrouping(v)} style={{
+                padding: "5px 12px", borderRadius: 6, fontFamily: "inherit", fontWeight: 700, fontSize: 11, cursor: "pointer",
+                border: `1px solid ${vendorGrouping === v ? C.purple : C.border}`,
+                background: vendorGrouping === v ? C.purpleDim : "transparent",
+                color: vendorGrouping === v ? C.purple : C.muted,
+              }}>{l}</button>
+            ))}
+          </div>
+        </div>
+        {vendorGrouping !== "none" && (
+          <>
+            {/* vendor column picker */}
+            <div style={{ background: C.surface, borderRadius: 8, padding: "12px 14px", marginBottom: 12, border: `1px solid ${C.border}` }}>
+              <label style={{ color: C.muted, fontSize: 11, fontWeight: 700, display: "block", marginBottom: 8 }}>VENDOR COLUMN SOURCE</label>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 5 }}>
+                  {[
+                    ["product", "Product Info", !productInfo],
+                    ["account", "Account Info", !accountInfo],
+                    ["data",    "Row Data",     false],
+                  ].map(([src, lbl, disabled]) => (
+                    <button key={src} onClick={() => !disabled && setVendorColSource(src)} disabled={disabled} style={{
+                      padding: "4px 10px", borderRadius: 6, fontFamily: "inherit", fontWeight: 700, fontSize: 11,
+                      cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.4 : 1,
+                      border: `1px solid ${vendorColSource === src ? C.purple : C.border}`,
+                      background: vendorColSource === src ? C.purpleDim : "transparent",
+                      color: vendorColSource === src ? C.purple : C.muted,
+                    }}>{lbl}</button>
+                  ))}
+                </div>
+                {vendorColSource === "product" && productInfo && (
+                  <select value={vendorColName} onChange={e => setVendorColName(e.target.value)}
+                    style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontFamily: "inherit", fontSize: 12, padding: "4px 8px" }}>
+                    <option value="">— pick column —</option>
+                    {productInfo.headers.map(h => <option key={h} value={h}>{h}</option>)}
+                  </select>
+                )}
+                {vendorColSource === "account" && accountInfo && (
+                  <select value={vendorColName} onChange={e => setVendorColName(e.target.value)}
+                    style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontFamily: "inherit", fontSize: 12, padding: "4px 8px" }}>
+                    <option value="">— pick column —</option>
+                    {accountInfo.headers.map(h => <option key={h} value={h}>{h}</option>)}
+                  </select>
+                )}
+                {vendorColSource === "data" && (
+                  <span style={{ color: C.muted, fontSize: 11 }}>Uses the <em>vendor</em> / <em>category</em> field from your inventory data</span>
+                )}
+              </div>
+            </div>
+
+            {/* per-vendor layout overrides */}
+            {(() => {
+              const vendors = [...new Set(exportRows.map(r => getVendorForRow(r)))].filter(Boolean).sort();
+              if (!vendors.length) return <p style={{ color: C.muted, fontSize: 12 }}>No vendors detected yet — configure vendor column above.</p>;
+              return (
+                <div>
+                  <p style={{ color: C.muted, fontSize: 11, fontWeight: 700, margin: "0 0 8px" }}>
+                    {vendors.length} VENDOR{vendors.length !== 1 ? "S" : ""} · configure a custom column layout per vendor (optional — defaults to global layout)
+                  </p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {vendors.map(vendor => {
+                      const customCols = vendorLayouts[vendor];
+                      const isExpanded = expandedVendorLayout === vendor;
+                      return (
+                        <div key={vendor} style={{ background: C.surface, borderRadius: 8, border: `1px solid ${customCols ? C.purple + "66" : C.border}`, overflow: "hidden" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px" }}>
+                            <span style={{ fontWeight: 700, fontSize: 13, color: C.text, flex: 1 }}>{vendor}</span>
+                            <span style={{ color: customCols ? C.purple : C.muted, fontSize: 11 }}>
+                              {customCols ? `Custom: ${customCols.length} col${customCols.length !== 1 ? "s" : ""}` : "Global layout"}
+                            </span>
+                            <button onClick={() => setExpandedVendorLayout(isExpanded ? null : vendor)}
+                              style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 5, color: C.muted, cursor: "pointer", fontSize: 11, padding: "3px 8px", fontFamily: "inherit" }}>
+                              {isExpanded ? "▲ Close" : "📝 Customize"}
+                            </button>
+                            {customCols && (
+                              <button onClick={() => setVendorLayouts(l => { const n = { ...l }; delete n[vendor]; return n; })}
+                                style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, padding: 0, fontFamily: "inherit" }}>Reset</button>
+                            )}
+                          </div>
+                          {isExpanded && (
+                            <div style={{ borderTop: `1px solid ${C.border}`, padding: "10px 12px" }}>
+                              <p style={{ color: C.muted, fontSize: 11, margin: "0 0 8px" }}>Toggle columns and rename headers for <strong style={{ color: C.purple }}>{vendor}</strong>. Order is inherited from global layout.</p>
+                              {cols.map(c => {
+                                const vCols = vendorLayouts[vendor] || cols.map(x => ({ ...x }));
+                                const included = vCols.some(vc => vc.id === c.id);
+                                const vcol = vCols.find(vc => vc.id === c.id);
+                                return (
+                                  <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                                    <input type="checkbox" checked={included}
+                                      onChange={() => {
+                                        const base = vendorLayouts[vendor] || cols.map(x => ({ ...x }));
+                                        const next = included ? base.filter(vc => vc.id !== c.id) : [...base, { ...c }];
+                                        setVendorLayouts(l => ({ ...l, [vendor]: next }));
+                                      }}
+                                      style={{ accentColor: C.purple, width: 14, height: 14 }} />
+                                    <span style={{ color: C.muted, fontSize: 11, width: 80 }}>{c.header || c.type}</span>
+                                    {included && (
+                                      <input value={vcol?.header ?? c.header} onChange={e => {
+                                        const base = vendorLayouts[vendor] || cols.map(x => ({ ...x }));
+                                        setVendorLayouts(l => ({ ...l, [vendor]: base.map(vc => vc.id === c.id ? { ...vc, header: e.target.value } : vc) }));
+                                      }}
+                                        placeholder="Column header"
+                                        style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 5, color: C.text, fontFamily: "inherit", fontSize: 12, padding: "3px 8px", outline: "none" }} />
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+          </>
+        )}
       </div>
 
       {/* account info upload */}
@@ -4891,7 +5282,11 @@ function ExportStep({ rows, onBack }) {
 
       <div style={{ display: "flex", justifyContent: "space-between" }}>
         <Btn variant="ghost" onClick={onBack}>← Back</Btn>
-        <Btn variant="success" onClick={doExport} disabled={cols.length === 0}>⬇ Download {fileName || "order"}.{exportFormat}</Btn>
+        <Btn variant="success" onClick={doExport} disabled={cols.length === 0}>
+          {vendorGrouping === "sheets" ? `⬇ Download ${fileName || "order"}_by_vendor.xlsx`
+          : vendorGrouping === "files" ? `⬇ Download ${[...new Set(exportRows.map(r => getVendorForRow(r)))].filter(Boolean).length} Vendor File${[...new Set(exportRows.map(r => getVendorForRow(r)))].filter(Boolean).length !== 1 ? "s" : ""}`
+          : `⬇ Download ${fileName || "order"}.${exportFormat}`}
+        </Btn>
       </div>
     </div>
   );
