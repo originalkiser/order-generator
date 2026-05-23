@@ -1023,9 +1023,30 @@ function SnakeGame({ onClose }) {
   }, [ctrlMode]);// eslint-disable-line
 
   const medals = ["🥇", "🥈", "🥉", "4.", "5.", "6.", "7."];
+
+  // Fullscreen
+  const containerRef = useRef();
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", handler);
+    return () => document.removeEventListener("fullscreenchange", handler);
+  }, []);
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) containerRef.current?.requestFullscreen();
+    else document.exitFullscreen();
+  };
+
+  const swipeZoneH = Math.round(ROWS * cellSize * 0.65);
+  const fsScale = isFullscreen
+    ? Math.max(1, Math.min(
+        (window.innerWidth * 0.92) / (COLS * cellSize),
+        (window.innerHeight * 0.62) / (ROWS * cellSize + swipeZoneH)
+      ))
+    : 1;
+
   const dBtn = (lbl, nd) => (
-    <button
-      onPointerDown={(e) => { e.preventDefault(); steer(nd); }}
+    <button onPointerDown={(e) => { e.preventDefault(); steer(nd); }}
       style={{ width: 48, height: 48, borderRadius: 8, background: C.card, border: `1px solid ${C.border}`, color: C.text, fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", userSelect: "none", WebkitUserSelect: "none", touchAction: "manipulation", fontFamily: "inherit" }}>
       {lbl}
     </button>
@@ -1035,90 +1056,106 @@ function SnakeGame({ onClose }) {
       {label}
     </button>
   );
+  const iconBtn = (title, label, onClick) => (
+    <button onClick={onClick} title={title} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "0 3px" }}>{label}</button>
+  );
+
+  // Shared sub-sections
+  const controlsSection = (
+    <>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", width: COLS * cellSize }}>
+        <button onClick={startGame} style={{ background: C.accent, border: "none", borderRadius: 5, color: "#fff", fontFamily: "inherit", fontWeight: 700, fontSize: 12, padding: "5px 12px", cursor: "pointer", whiteSpace: "nowrap" }}>
+          {display.started ? "↺ Restart" : "▶ Start"}
+        </button>
+        {display.gameOver && <span style={{ color: C.red, fontSize: 11, fontWeight: 700 }}>Game over!</span>}
+      </div>
+      <div style={{ display: "flex", gap: 4, width: COLS * cellSize }}>
+        {modeBtn("D-Pad",    ctrlMode === "dpad",     () => setCtrlMode("dpad"))}
+        {modeBtn("Swipe",    ctrlMode === "swipe",    () => setCtrlMode("swipe"))}
+        {modeBtn("Keyboard", ctrlMode === "keyboard", () => setCtrlMode("keyboard"))}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, width: COLS * cellSize }}>
+        <span style={{ color: C.muted, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>Grid size:</span>
+        <select value={cellSize} onChange={e => { const v = Number(e.target.value); setCellSize(v); cellRef.current = v; }}
+          style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 5, color: C.text, fontFamily: "inherit", fontSize: 11, padding: "3px 6px", outline: "none", cursor: "pointer" }}>
+          {SNAKE_SIZES.map(s => <option key={s.cell} value={s.cell}>{s.label}</option>)}
+        </select>
+      </div>
+    </>
+  );
+
+  const leaderboardSection = leaderboard.length > 0 && (
+    <div style={{ width: COLS * cellSize, borderTop: `1px solid ${C.border}`, paddingTop: 10, marginTop: 2 }}>
+      <div style={{ color: C.muted, fontWeight: 700, fontSize: 10, letterSpacing: 1, marginBottom: 8 }}>🏆 LEADERBOARD</div>
+      <div style={{ display: "flex", justifyContent: "center", gap: 14, marginBottom: leaderboard.length > 3 ? 8 : 0 }}>
+        {leaderboard.slice(0, 3).map((entry, i) => (
+          <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+            <span style={{ fontSize: 16 }}>{medals[i]}</span>
+            <span style={{ color: i === 0 ? C.accent : i === 1 ? C.text : C.muted, fontSize: 13, fontWeight: 800, fontFamily: "monospace" }}>{entry.score}</span>
+            <span style={{ color: C.muted, fontSize: 9 }}>{entry.date}</span>
+          </div>
+        ))}
+      </div>
+      {leaderboard.length > 3 && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
+          {leaderboard.slice(3).map((entry, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ color: C.muted, fontSize: 10, fontWeight: 700, minWidth: 14 }}>{medals[i + 3]}</span>
+              <span style={{ color: C.text, fontSize: 11, fontWeight: 700, fontFamily: "monospace" }}>{entry.score}</span>
+              <span style={{ color: C.muted, fontSize: 9 }}>{entry.date}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 
   return (
-    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 20px", marginBottom: 24 }}>
-      {/* Centered column */}
-      <div style={{ width: "fit-content", margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+    <div ref={containerRef} style={{ background: isFullscreen ? C.bg : C.surface, border: isFullscreen ? "none" : `1px solid ${C.border}`, borderRadius: isFullscreen ? 0 : 12, padding: isFullscreen ? 0 : "16px 20px", marginBottom: isFullscreen ? 0 : 24, display: "flex", alignItems: "center", justifyContent: "center", minHeight: isFullscreen ? "100vh" : undefined }}>
+      <div style={{ width: "fit-content", margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 10, transform: isFullscreen ? `scale(${fsScale})` : undefined, transformOrigin: "center center" }}>
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: COLS * cellSize }}>
           <span style={{ color: C.accent, fontWeight: 800, fontSize: 13, fontFamily: "monospace" }}>🐍 SNAKE · {display.score}</span>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 2px" }}>✕</button>
-        </div>
-
-        {/* Canvas */}
-        <canvas ref={canvasRef} width={COLS * cellSize} height={ROWS * cellSize}
-          style={{ display: "block", borderRadius: 6, border: `1px solid ${C.border}`, imageRendering: "pixelated", touchAction: "none" }} />
-
-        {/* Start button */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", width: COLS * cellSize }}>
-          <button onClick={startGame} style={{ background: C.accent, border: "none", borderRadius: 5, color: "#fff", fontFamily: "inherit", fontWeight: 700, fontSize: 12, padding: "5px 12px", cursor: "pointer", whiteSpace: "nowrap" }}>
-            {display.started ? "↺ Restart" : "▶ Start"}
-          </button>
-          {display.gameOver && <span style={{ color: C.red, fontSize: 11, fontWeight: 700 }}>Game over!</span>}
-        </div>
-        {/* Control mode toggle */}
-        <div style={{ display: "flex", gap: 4, width: COLS * cellSize }}>
-          {modeBtn("D-Pad",    ctrlMode === "dpad",     () => setCtrlMode("dpad"))}
-          {modeBtn("Swipe",    ctrlMode === "swipe",    () => setCtrlMode("swipe"))}
-          {modeBtn("Keyboard", ctrlMode === "keyboard", () => setCtrlMode("keyboard"))}
-        </div>
-        {/* Size selector */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, width: COLS * cellSize }}>
-          <span style={{ color: C.muted, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>Grid size:</span>
-          <select
-            value={cellSize}
-            onChange={e => { const v = Number(e.target.value); setCellSize(v); cellRef.current = v; }}
-            style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 5, color: C.text, fontFamily: "inherit", fontSize: 11, padding: "3px 6px", outline: "none", cursor: "pointer" }}>
-            {SNAKE_SIZES.map(s => <option key={s.cell} value={s.cell}>{s.label}</option>)}
-          </select>
-        </div>
-
-        {/* Control area */}
-        {ctrlMode === "dpad" && (
-          <div style={{ display: "grid", gridTemplateColumns: "48px 48px 48px", gridTemplateRows: "48px 48px 48px", gap: 5 }}>
-            <div />{dBtn("▲", { x: 0, y: -1 })}<div />
-            {dBtn("◄", { x: -1, y: 0 })}<div />{dBtn("►", { x: 1, y: 0 })}
-            <div />{dBtn("▼", { x: 0, y: 1 })}<div />
+          <div style={{ display: "flex", gap: 2, alignItems: "center" }}>
+            {iconBtn(isFullscreen ? "Exit fullscreen" : "Full screen", isFullscreen ? "⊠" : "⛶", toggleFullscreen)}
+            {iconBtn("Close", "✕", onClose)}
           </div>
-        )}
-        {ctrlMode === "swipe" && (
-          <div ref={swipeZoneRef} style={{ width: COLS * cellSize, height: 154, background: C.card, border: `2px dashed ${C.border}`, borderRadius: 10, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", touchAction: "none", userSelect: "none", gap: 6, cursor: "default" }}>
-            <span style={{ fontSize: 28, lineHeight: 1 }}>👆</span>
-            <span style={{ color: C.muted, fontSize: 12 }}>Swipe here to steer</span>
-            <span style={{ color: C.border, fontSize: 10 }}>↑ ↓ ← →</span>
-          </div>
-        )}
+        </div>
 
-        {/* Leaderboard */}
-        {leaderboard.length > 0 && (
-          <div style={{ width: COLS * cellSize, borderTop: `1px solid ${C.border}`, paddingTop: 10, marginTop: 2 }}>
-            <div style={{ color: C.muted, fontWeight: 700, fontSize: 10, letterSpacing: 1, marginBottom: 8 }}>🏆 LEADERBOARD</div>
-            {/* Top 3 — centered row */}
-            <div style={{ display: "flex", justifyContent: "center", gap: 14, marginBottom: leaderboard.length > 3 ? 8 : 0 }}>
-              {leaderboard.slice(0, 3).map((entry, i) => (
-                <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-                  <span style={{ fontSize: 16 }}>{medals[i]}</span>
-                  <span style={{ color: i === 0 ? C.accent : i === 1 ? C.text : C.muted, fontSize: 13, fontWeight: 800, fontFamily: "monospace" }}>{entry.score}</span>
-                  <span style={{ color: C.muted, fontSize: 9 }}>{entry.date}</span>
-                </div>
-              ))}
+        {/* In swipe mode: canvas + swipe zone are one connected block, controls go below */}
+        {ctrlMode === "swipe" ? (
+          <>
+            {/* Canvas flush into swipe zone */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+              <canvas ref={canvasRef} width={COLS * cellSize} height={ROWS * cellSize}
+                style={{ display: "block", borderRadius: "6px 6px 0 0", border: `1px solid ${C.border}`, borderBottom: "none", imageRendering: "pixelated", touchAction: "none" }} />
+              <div ref={swipeZoneRef} style={{ width: COLS * cellSize, height: swipeZoneH, background: C.card, border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 6px 6px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", touchAction: "none", userSelect: "none", gap: 8, cursor: "default" }}>
+                <span style={{ fontSize: 36, lineHeight: 1 }}>👆</span>
+                <span style={{ color: C.muted, fontSize: 13 }}>Swipe here to steer</span>
+                <span style={{ color: C.border, fontSize: 11 }}>↑ ↓ ← →</span>
+              </div>
             </div>
-            {/* 4–7 in 2×2 grid */}
-            {leaderboard.length > 3 && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
-                {leaderboard.slice(3).map((entry, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                    <span style={{ color: C.muted, fontSize: 10, fontWeight: 700, minWidth: 14 }}>{medals[i + 3]}</span>
-                    <span style={{ color: C.text, fontSize: 11, fontWeight: 700, fontFamily: "monospace" }}>{entry.score}</span>
-                    <span style={{ color: C.muted, fontSize: 9 }}>{entry.date}</span>
-                  </div>
-                ))}
+            {/* Controls below the swipe zone */}
+            {controlsSection}
+          </>
+        ) : (
+          <>
+            {/* Controls above the d-pad / nothing (original layout) */}
+            <canvas ref={canvasRef} width={COLS * cellSize} height={ROWS * cellSize}
+              style={{ display: "block", borderRadius: 6, border: `1px solid ${C.border}`, imageRendering: "pixelated", touchAction: "none" }} />
+            {controlsSection}
+            {ctrlMode === "dpad" && (
+              <div style={{ display: "grid", gridTemplateColumns: "48px 48px 48px", gridTemplateRows: "48px 48px 48px", gap: 5 }}>
+                <div />{dBtn("▲", { x: 0, y: -1 })}<div />
+                {dBtn("◄", { x: -1, y: 0 })}<div />{dBtn("►", { x: 1, y: 0 })}
+                <div />{dBtn("▼", { x: 0, y: 1 })}<div />
               </div>
             )}
-          </div>
+          </>
         )}
+
+        {leaderboardSection}
       </div>
     </div>
   );
