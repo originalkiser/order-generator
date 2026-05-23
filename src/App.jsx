@@ -791,6 +791,47 @@ function buildFetchUrl(conn) {
   return base + sep + params.map(p => `${encodeURIComponent(p.key.trim())}=${encodeURIComponent(p.value)}`).join("&");
 }
 
+// Parses a curl command and returns partial connection fields
+function parseCurl(cmd) {
+  const result = { url: "", queryParams: [], authType: "none", authHeader: "X-API-Key", authValue: "" };
+  // Strip line continuations and normalise
+  const flat = cmd.replace(/\\\s*\n/g, " ").replace(/\s+/g, " ").trim();
+
+  // Extract URL — first bare https?:// or value after -X METHOD
+  const urlMatch = flat.match(/['"]?(https?:\/\/[^\s'"]+)['"]?/);
+  if (urlMatch) {
+    try {
+      const parsed = new URL(urlMatch[1]);
+      parsed.searchParams.forEach((v, k) => result.queryParams.push({ key: k, value: v }));
+      parsed.search = "";
+      result.url = parsed.toString();
+    } catch { result.url = urlMatch[1].split("?")[0]; }
+  }
+
+  // Extract headers
+  const headerRe = /-H\s+['"]([^'"]+)['"]/g;
+  let hm;
+  while ((hm = headerRe.exec(flat)) !== null) {
+    const [name, ...rest] = hm[1].split(":");
+    const value = rest.join(":").trim();
+    const nameLower = name.trim().toLowerCase();
+    if (nameLower === "authorization") {
+      if (value.toLowerCase().startsWith("bearer ")) {
+        result.authType = "bearer";
+        result.authValue = value.slice(7).trim();
+      } else if (value.toLowerCase().startsWith("basic ")) {
+        result.authType = "bearer"; // treat basic as bearer fallback
+        result.authValue = value.slice(6).trim();
+      }
+    } else if (nameLower === "x-api-key" || nameLower.includes("api-key") || nameLower.includes("apikey")) {
+      result.authType = "apikey";
+      result.authHeader = name.trim();
+      result.authValue = value;
+    }
+  }
+  return result;
+}
+
 function newConnection() {
   return { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: "", url: "", queryParams: [], authType: "none", authHeader: "X-API-Key", authValue: "", dataFormat: "auto", jsonPath: "", refreshPolicy: "manual", lastFetched: null, lastFetchOk: false, filters: [] };
 }
@@ -872,7 +913,7 @@ function SnakeGame({ onClose }) {
     ctx.fillStyle = "#0f1117";
     ctx.fillRect(0, 0, COLS * CS, ROWS * CS);
     // Grid dots
-    ctx.fillStyle = "#1e2335";
+    ctx.fillStyle = "#3a4a6e";
     const dot = Math.floor(CS * 0.4);
     for (let x = 0; x < COLS; x++) for (let y = 0; y < ROWS; y++) ctx.fillRect(x * CS + dot, y * CS + dot, 2, 2);
     // Food
@@ -985,19 +1026,21 @@ function SnakeGame({ onClose }) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const onStart = (e) => { const t = e.touches[0]; touchStartRef.current = { x: t.clientX, y: t.clientY }; e.preventDefault(); };
-    const onEnd = (e) => {
+    const onMove = (e) => {
       if (!touchStartRef.current) return;
-      const t = e.changedTouches[0];
+      const t = e.touches[0];
       const dx = t.clientX - touchStartRef.current.x, dy = t.clientY - touchStartRef.current.y;
-      touchStartRef.current = null;
-      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      if (Math.abs(dx) < 22 && Math.abs(dy) < 22) return;
       if (Math.abs(dx) > Math.abs(dy)) steer({ x: dx > 0 ? 1 : -1, y: 0 });
       else steer({ x: 0, y: dy > 0 ? 1 : -1 });
+      touchStartRef.current = { x: t.clientX, y: t.clientY };
       e.preventDefault();
     };
+    const onEnd = () => { touchStartRef.current = null; };
     canvas.addEventListener("touchstart", onStart, { passive: false });
+    canvas.addEventListener("touchmove", onMove, { passive: false });
     canvas.addEventListener("touchend", onEnd, { passive: false });
-    return () => { canvas.removeEventListener("touchstart", onStart); canvas.removeEventListener("touchend", onEnd); };
+    return () => { canvas.removeEventListener("touchstart", onStart); canvas.removeEventListener("touchmove", onMove); canvas.removeEventListener("touchend", onEnd); };
   }, []);// eslint-disable-line
 
   // Control mode: "dpad" | "swipe" | "keyboard"
@@ -1007,19 +1050,21 @@ function SnakeGame({ onClose }) {
     const zone = swipeZoneRef.current;
     if (!zone || ctrlMode !== "swipe") return;
     const onStart = (e) => { const t = e.touches[0]; touchStartRef.current = { x: t.clientX, y: t.clientY }; e.preventDefault(); };
-    const onEnd = (e) => {
+    const onMove = (e) => {
       if (!touchStartRef.current) return;
-      const t = e.changedTouches[0];
+      const t = e.touches[0];
       const dx = t.clientX - touchStartRef.current.x, dy = t.clientY - touchStartRef.current.y;
-      touchStartRef.current = null;
-      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      if (Math.abs(dx) < 22 && Math.abs(dy) < 22) return;
       if (Math.abs(dx) > Math.abs(dy)) steer({ x: dx > 0 ? 1 : -1, y: 0 });
       else steer({ x: 0, y: dy > 0 ? 1 : -1 });
+      touchStartRef.current = { x: t.clientX, y: t.clientY };
       e.preventDefault();
     };
+    const onEnd = () => { touchStartRef.current = null; };
     zone.addEventListener("touchstart", onStart, { passive: false });
+    zone.addEventListener("touchmove", onMove, { passive: false });
     zone.addEventListener("touchend", onEnd, { passive: false });
-    return () => { zone.removeEventListener("touchstart", onStart); zone.removeEventListener("touchend", onEnd); };
+    return () => { zone.removeEventListener("touchstart", onStart); zone.removeEventListener("touchmove", onMove); zone.removeEventListener("touchend", onEnd); };
   }, [ctrlMode]);// eslint-disable-line
 
   const medals = ["🥇", "🥈", "🥉", "4.", "5.", "6.", "7."];
@@ -1408,6 +1453,8 @@ function DataSourcePanel({ onLoadData, onClose }) {
   const [fetchError, setFetchError] = useState("");
   const [filters, setFilters] = useState([]);
   const [newFilterCol, setNewFilterCol] = useState("");
+  const [curlInput, setCurlInput] = useState("");
+  const [curlOpen, setCurlOpen] = useState(false);
 
   const saveConns = (c) => { setConnections(c); saveConnections(c); };
 
@@ -1566,6 +1613,37 @@ function DataSourcePanel({ onLoadData, onClose }) {
           {/* EDIT VIEW */}
           {view === "edit" && editConn && (
             <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+
+              {/* cURL importer */}
+              <div style={{ background: C.card, borderRadius: 10, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+                <button onClick={() => setCurlOpen(v => !v)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", background: "none", border: "none", padding: "11px 14px", cursor: "pointer", color: C.text, fontFamily: "inherit" }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontFamily: "monospace", fontSize: 12, background: C.surface, color: C.accent, padding: "2px 7px", borderRadius: 4, border: `1px solid ${C.border}` }}>curl</span>
+                    <span style={{ fontWeight: 700, fontSize: 13 }}>Import from cURL</span>
+                    <span style={{ color: C.muted, fontSize: 11 }}>Paste a cURL command from API docs to auto-fill this form</span>
+                  </span>
+                  <span style={{ color: C.muted, fontSize: 12 }}>{curlOpen ? "▲" : "▼"}</span>
+                </button>
+                {curlOpen && (
+                  <div style={{ padding: "0 14px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+                    <textarea
+                      value={curlInput}
+                      onChange={e => setCurlInput(e.target.value)}
+                      placeholder={`curl -X GET "https://api.example.com/v1/inventory?location=WH1" \\\n  -H "Authorization: Bearer YOUR_TOKEN"`}
+                      rows={5}
+                      style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontFamily: "monospace", fontSize: 11, padding: "8px 10px", resize: "vertical", outline: "none", lineHeight: 1.6 }}
+                    />
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <Btn small onClick={() => {
+                        const parsed = parseCurl(curlInput);
+                        setEditConn(prev => ({ ...prev, url: parsed.url || prev.url, queryParams: parsed.queryParams.length ? parsed.queryParams : prev.queryParams, authType: parsed.authType !== "none" ? parsed.authType : prev.authType, authHeader: parsed.authHeader || prev.authHeader, authValue: parsed.authValue || prev.authValue }));
+                        setCurlOpen(false); setCurlInput("");
+                      }} disabled={!curlInput.trim()}>Apply</Btn>
+                      <span style={{ color: C.muted, fontSize: 11 }}>Fills URL, query params, and auth — review before fetching</span>
+                    </div>
+                  </div>
+                )}
+              </div>
 
               {/* Name */}
               <div>
