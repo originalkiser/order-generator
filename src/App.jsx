@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { VERSION, C } from "./constants.js";
+import { VERSION } from "./constants.js";
+import { useTheme } from "./context/theme.jsx";
 import { loadUomMappings, loadCategoryUom, loadPrefixSuffixRules, findBestSavedMapping, saveSession, loadSession, clearSession } from "./utils/storage.js";
 import { buildPendingIndex } from "./utils/calc.js";
 import { ErrorBoundary } from "./components/ui.jsx";
@@ -14,6 +15,7 @@ import { ReviewStep } from "./steps/ReviewStep.jsx";
 import { ExportStep } from "./steps/ExportStep.jsx";
 
 export default function App() {
+  const { C, theme, toggleTheme } = useTheme();
   // Loaded once at mount; never changes — used only for initial state values
   const _s = useRef(loadSession()).current;
 
@@ -160,6 +162,11 @@ export default function App() {
             {activeConnName && <span style={{ color: C.accent, marginLeft: 8 }}>· {activeConnName}</span>}
           </div>
         </div>
+        <button onClick={toggleTheme} title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, color: C.muted, fontFamily: "inherit", fontSize: 16, cursor: "pointer", padding: "6px 10px", lineHeight: 1, transition: "all .15s" }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.muted; }}>
+          {theme === "dark" ? "☀" : "🌙"}
+        </button>
         <button onClick={() => setShowDataSource(true)} style={{ background: activeConnName ? C.accentDim : "transparent", border: `1px solid ${activeConnName ? C.accent : C.border}`, borderRadius: 8, color: activeConnName ? C.accent : C.muted, fontFamily: "inherit", fontWeight: 700, fontSize: 13, cursor: "pointer", padding: "8px 16px", transition: "all .15s" }}
           onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
           onMouseLeave={e => { if (!activeConnName) { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.muted; } }}>

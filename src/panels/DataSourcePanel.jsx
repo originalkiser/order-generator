@@ -1,12 +1,13 @@
 import { useState } from "react";
 import * as XLSX from "xlsx";
-import { C } from "../constants.js";
+import { useC } from "../context/theme.jsx";
 import { Btn, Input, Select, DataPreview, Badge } from "../components/ui.jsx";
 import { buildFetchUrl, fetchDataSource, applyConnectionFilters, parseCurl, newConnection } from "../utils/dataSource.js";
 import { loadConnections, saveConnections } from "../utils/storage.js";
 
 // ── Data Source Panel ─────────────────────────────────────────────────────────
 export function DataSourcePanel({ onLoadData, onClose }) {
+  const C = useC();
   const [connections, setConnections] = useState(() => loadConnections());
   const [view, setView] = useState("list"); // "list" | "edit"
   const [editConn, setEditConn] = useState(null);

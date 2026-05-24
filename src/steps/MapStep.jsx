@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { C, REQUIRED_CORE, MANUAL_ENTRY_FIELDS, FIELD_LABELS } from "../constants.js";
+import { REQUIRED_CORE, MANUAL_ENTRY_FIELDS, FIELD_LABELS } from "../constants.js";
+import { useC } from "../context/theme.jsx";
 import { Btn, Input, Select, Badge, DataPreview } from "../components/ui.jsx";
 import { saveMappingToStorage } from "../utils/storage.js";
 
 export function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion }) {
+  const C = useC();
   // initialState  = full saved state when user pressed Back (session memory)
   // suggestion    = best matching saved mapping from localStorage (cross-session)
   const init = initialState || suggestion?.mapState || {};

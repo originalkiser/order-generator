@@ -1,11 +1,20 @@
 export const VERSION = "v1.0";
 
-// ── palette ───────────────────────────────────────────────────────────────────
-export const C = {
+// ── palettes ──────────────────────────────────────────────────────────────────
+export const DARK = {
   bg: "#0f1117", surface: "#181c27", card: "#1e2335", border: "#2a3150",
   accent: "#4f8ef7", accentDim: "#2a4a8a", green: "#2ecc71", orange: "#f39c12",
   purple: "#a78bfa", purpleDim: "#4c3a8a", red: "#e74c3c", text: "#e8ecf4", muted: "#7a85a3",
 };
+
+export const LIGHT = {
+  bg: "#f0f2f8", surface: "#ffffff", card: "#e8ecf6", border: "#cdd3e8",
+  accent: "#2563eb", accentDim: "#dbeafe", green: "#16a34a", orange: "#d97706",
+  purple: "#7c3aed", purpleDim: "#ede9fe", red: "#dc2626", text: "#111827", muted: "#6b7280",
+};
+
+// Default export kept for any code that needs the palette statically (e.g. canvas drawing)
+export const C = DARK;
 
 export const REQUIRED_CORE = ["location", "product", "on_hand", "leadtime"];
 export const MANUAL_ENTRY_FIELDS = ["location", "product", "leadtime"];

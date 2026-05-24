@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import * as XLSX from "xlsx";
-import { C } from "../constants.js";
+import { useC } from "../context/theme.jsx";
 import { Btn, DataPreview } from "../components/ui.jsx";
 
 function downloadTemplates() {
@@ -85,6 +85,7 @@ function downloadTemplates() {
 }
 
 export function UploadStep({ onData, onManualBuild }) {
+  const C = useC();
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
   const [preview, setPreview] = useState(null);

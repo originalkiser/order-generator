@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from "react";
-import { C, SNAKE_SIZES } from "../constants.js";
+import { SNAKE_SIZES } from "../constants.js";
+import { useC } from "../context/theme.jsx";
 
 export function SnakeGame({ onClose }) {
+  const C = useC();
   const COLS = 20, ROWS = 20;
   const [cellSize, setCellSize] = useState(16);
   const cellRef = useRef(16); // always fresh in interval callbacks

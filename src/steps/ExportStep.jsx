@@ -1,11 +1,13 @@
 import { useState, useRef } from "react";
 import * as XLSX from "xlsx";
-import { C, STOCK_COLS } from "../constants.js";
+import { STOCK_COLS } from "../constants.js";
+import { useC } from "../context/theme.jsx";
 import { fmtNum, fmtCurrency } from "../utils/format.js";
 import { Btn, Badge, Input, Select } from "../components/ui.jsx";
 import { ColumnFilter } from "../components/ColumnFilter.jsx";
 
 export function ExportStep({ rows, onBack }) {
+  const C = useC();
   const [cols, setCols] = useState([
     { id: 1, type: "data", key: "location", header: "Location" },
     { id: 2, type: "data", key: "product", header: "Product" },

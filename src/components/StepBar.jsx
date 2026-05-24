@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { C } from "../constants.js";
+import { useC } from "../context/theme.jsx";
 
 // ── step bar ──────────────────────────────────────────────────────────────────
 export const STEPS_UPLOAD = ["Upload", "Map Columns", "Unit of Measure", "Review Order", "Export"];
@@ -8,6 +8,7 @@ export const STEPS_MANUAL = ["Upload", "Build Order", "Review Order", "Export"];
 export const manualStepIndex = { 0: 0, 1: 1, 3: 2, 4: 3 };
 
 export const StepBar = ({ current, buildMode, onReviewTripleClick }) => {
+  const C = useC();
   const steps = buildMode === "manual" ? STEPS_MANUAL : STEPS_UPLOAD;
   const idx = buildMode === "manual" ? (manualStepIndex[current] ?? 0) : current;
   const clickTimesRef = useRef([]);

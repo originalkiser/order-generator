@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from "react";
-import { C } from "../constants.js";
+import { useC } from "../context/theme.jsx";
 
 // ── Location multi-select (used in ManualBuildStep) ──────────────────────────
 export function LocationMultiSelect({ locations, selected, onChange, placeholder = "Select locations…" }) {
+  const C = useC();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [btnWidth, setBtnWidth] = useState(200);

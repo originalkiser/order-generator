@@ -1,10 +1,11 @@
 import { useState, useRef } from "react";
 import * as XLSX from "xlsx";
-import { C } from "../constants.js";
+import { useC } from "../context/theme.jsx";
 import { Btn, Input, DraftInput } from "../components/ui.jsx";
 import { LocationMultiSelect } from "../components/LocationMultiSelect.jsx";
 
 export function ManualBuildStep({ onConfirm, onBack }) {
+  const C = useC();
   const [locations, setLocations] = useState([]);
   const [newLocInput, setNewLocInput] = useState("");
   const [orderEntries, setOrderEntries] = useState([]); // { id, product, location, qty }

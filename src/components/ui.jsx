@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, Component } from "react";
-import { C } from "../constants.js";
+import { useC } from "../context/theme.jsx";
 
 // Error boundary to surface runtime crashes instead of blank-screening
 export class ErrorBoundary extends Component {
@@ -49,11 +49,14 @@ export function DraftInput({ value, onCommit, style, min = 0, ...rest }) {
   );
 }
 
-export const Badge = ({ children, color = C.accent }) => (
-  <span style={{ background: color + "22", color, border: `1px solid ${color}44`, borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>{children}</span>
-);
+export function Badge({ children, color }) {
+  const C = useC();
+  const c = color ?? C.accent;
+  return <span style={{ background: c + "22", color: c, border: `1px solid ${c}44`, borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>{children}</span>;
+}
 
 export const Btn = ({ children, onClick, variant = "primary", disabled, small, style: extra }) => {
+  const C = useC();
   const variants = {
     primary: { background: C.accent, color: "#fff", border: "none" },
     ghost: { background: "transparent", color: C.accent, border: `1px solid ${C.accentDim}` },
@@ -69,21 +72,24 @@ export const Btn = ({ children, onClick, variant = "primary", disabled, small, s
   );
 };
 
-export const Input = ({ value, onChange, type = "text", style: extra, ...rest }) => (
-  <input type={type} value={value} onChange={onChange}
+export const Input = ({ value, onChange, type = "text", style: extra, ...rest }) => {
+  const C = useC();
+  return <input type={type} value={value} onChange={onChange}
     style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontFamily: "inherit", fontSize: 13, padding: "6px 10px", outline: "none", ...extra }}
-    {...rest} />
-);
+    {...rest} />;
+};
 
-export const Select = ({ value, onChange, children, style: extra }) => (
-  <select value={value} onChange={onChange}
+export const Select = ({ value, onChange, children, style: extra }) => {
+  const C = useC();
+  return <select value={value} onChange={onChange}
     style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, color: value ? C.text : C.muted, fontFamily: "inherit", fontSize: 13, padding: "6px 10px", outline: "none", cursor: "pointer", ...extra }}>
     {children}
-  </select>
-);
+  </select>;
+};
 
 // ── data preview table ────────────────────────────────────────────────────────
 export function DataPreview({ headers, rows, highlightCols = [], maxRows = 15 }) {
+  const C = useC();
   const preview = rows.slice(0, maxRows);
   return (
     <div style={{ overflowX: "auto", borderRadius: 10, border: `1px solid ${C.border}`, maxHeight: 300, overflowY: "auto" }}>
@@ -125,6 +131,7 @@ export function DataPreview({ headers, rows, highlightCols = [], maxRows = 15 })
 // Callout card shown in Review step (Most Ordered / Least Ordered).
 // Module-level so React never remounts it due to a new function reference.
 export function OrderCalloutCard({ title, accentColor, theRows, mode, setMode, n, setN, sortedList, label, onSetOrder, onSetGroupOrders }) {
+  const C = useC();
   const [bulkVal, setBulkVal] = useState("");
   return (
     <div style={{ flex: 1, minWidth: 220, background: C.surface, borderRadius: 10, padding: "12px 14px", border: `1px solid ${C.border}`, overflow: "auto", minHeight: 120 }}>

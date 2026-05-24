@@ -1,7 +1,8 @@
 import { useState, useRef } from "react";
-import { C } from "../constants.js";
+import { useC } from "../context/theme.jsx";
 
 export function ColumnFilter({ colKey, rows, textValue, onTextChange, checkedFilter, onCheckedChange }) {
+  const C = useC();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const ref = useRef();

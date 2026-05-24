@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { C } from "../constants.js";
+import { useC } from "../context/theme.jsx";
 import { Btn, Input } from "../components/ui.jsx";
 import { trimVal, saveUomMappings, saveCategoryUom, savePrefixSuffixRules } from "../utils/storage.js";
 import { getUomConversion, detectPrefixSuffixPatterns } from "../utils/calc.js";
 
 export function UomStep({ rawRows, headers, mapping, usageConfig, manualEntry, hasCategory, hasUom, productRules, initialUomMappings, initialCategoryUomSettings, initialPrefixSuffixRules, onBack, onConfirm }) {
+  const C = useC();
   const [uomMappings, setUomMappings] = useState(initialUomMappings || []);
   const [categoryUomSettings, setCategoryUomSettings] = useState(initialCategoryUomSettings || {});
   const [prefixSuffixRules, setPrefixSuffixRules] = useState(initialPrefixSuffixRules || []);

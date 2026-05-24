@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
-import { C } from "../constants.js";
+import { useC } from "../context/theme.jsx";
 import { fmtNum, fmtUsage, fmtCurrency } from "../utils/format.js";
 import { trimVal, loadProductRules, saveProductRules, loadIgnoreMax, saveIgnoreMax, loadUsageAdjustments, saveUsageAdjustments, loadTablePrefs, saveTablePrefs } from "../utils/storage.js";
 import { calcOrder, calcDaysOnHand, applyProductRule, computeSuggested, applyOnHandConstraints, getUomConversion, getUsageMultiplier, isTotalRow, buildPendingIndex, autoPendingColMap, detectPrefixSuffixPatterns } from "../utils/calc.js";
@@ -13,6 +13,7 @@ export function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig,
   const hasUom = !!mapping.uom;
   const limitType = orderLimits?.limitType || "dollars"; // "units" | "dollars"
 
+  const C = useC();
   // Keep a stable ref to the snapshot callback so the rows effect doesn't re-run on every render
   const onRowsSnapshotRef = useRef(onRowsSnapshot);
   useEffect(() => { onRowsSnapshotRef.current = onRowsSnapshot; }, [onRowsSnapshot]);
