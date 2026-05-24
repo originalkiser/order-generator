@@ -7,11 +7,15 @@ import { calcOrder, calcDaysOnHand, applyProductRule, computeSuggested, applyOnH
 import { Btn, DraftInput, Badge, Input, Select, OrderCalloutCard } from "../components/ui.jsx";
 import { ColumnFilter } from "../components/ColumnFilter.jsx";
 
-export function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manualEntry, orderLimits, uomMappings, categoryUomSettings, prefixSuffixRules, onConfirm, onBack, initialPendingOrders = [], isManualBuild = false, initialRows = null, manualLocations = [] }) {
+export function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manualEntry, orderLimits, uomMappings, categoryUomSettings, prefixSuffixRules, onConfirm, onBack, initialPendingOrders = [], isManualBuild = false, initialRows = null, manualLocations = [], onRowsSnapshot = null }) {
   const hasCost = !!mapping.cost;
   const hasCategory = !!mapping.category;
   const hasUom = !!mapping.uom;
   const limitType = orderLimits?.limitType || "dollars"; // "units" | "dollars"
+
+  // Keep a stable ref to the snapshot callback so the rows effect doesn't re-run on every render
+  const onRowsSnapshotRef = useRef(onRowsSnapshot);
+  useEffect(() => { onRowsSnapshotRef.current = onRowsSnapshot; }, [onRowsSnapshot]);
 
   // Product rules — loaded from localStorage, editable inline
   const [productRules, setProductRules] = useState(() => loadProductRules());
@@ -109,6 +113,9 @@ export function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig,
   const saveIgnoreMaxState = (v) => { setIgnoreMax(v); saveIgnoreMax(v); };
 
   const [rows, setRows] = useState(() => initialRows ?? buildRows(productRules, uomMappings, categoryUomSettings, prefixSuffixRules, [], loadUsageAdjustments(), loadIgnoreMax()));
+  // Notify parent of row changes so it can persist them in the session (refresh recovery)
+  useEffect(() => { onRowsSnapshotRef.current?.(rows); }, [rows]);
+
   const [targetLocal, setTargetLocal] = useState(targetDays);
   const [effMinDays, setEffMinDays] = useState(() => targetDays || 7);
   // colTextFilters: { [colKey]: string }  — type-in text filter

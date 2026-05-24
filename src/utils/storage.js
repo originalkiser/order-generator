@@ -106,3 +106,16 @@ export function findBestSavedMapping(headers) {
                        .sort((a, b) => b.score - a.score);
   return scored.length ? scored[0].s : null;
 }
+
+// ── Session (survives refresh, cleared on new order) ──────────────────────────
+const SS_SESSION_KEY = "ordergen_session_v1";
+
+export function saveSession(blob) {
+  try { sessionStorage.setItem(SS_SESSION_KEY, JSON.stringify(blob)); } catch {}
+}
+export function loadSession() {
+  try { return JSON.parse(sessionStorage.getItem(SS_SESSION_KEY) || "null"); } catch { return null; }
+}
+export function clearSession() {
+  try { sessionStorage.removeItem(SS_SESSION_KEY); } catch {}
+}

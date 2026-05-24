@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { VERSION, C } from "./constants.js";
-import { loadUomMappings, loadCategoryUom, loadPrefixSuffixRules, findBestSavedMapping } from "./utils/storage.js";
+import { loadUomMappings, loadCategoryUom, loadPrefixSuffixRules, findBestSavedMapping, saveSession, loadSession, clearSession } from "./utils/storage.js";
+import { buildPendingIndex } from "./utils/calc.js";
 import { ErrorBoundary } from "./components/ui.jsx";
 import { SnakeGame } from "./components/SnakeGame.jsx";
 import { StepBar } from "./components/StepBar.jsx";
@@ -13,35 +14,82 @@ import { ReviewStep } from "./steps/ReviewStep.jsx";
 import { ExportStep } from "./steps/ExportStep.jsx";
 
 export default function App() {
-  const [step, setStep] = useState(0);
-  const [buildMode, setBuildMode] = useState("upload"); // "upload" | "manual"
-  const [fileData, setFileData] = useState(null);
-  const [mapping, setMapping] = useState(null);
-  const [targetDays, setTargetDays] = useState(14);
-  const [usageConfig, setUsageConfig] = useState(null);
-  const [manualEntry, setManualEntry] = useState(null);
-  const [orderLimits, setOrderLimits] = useState(null);
-  const [finalRows, setFinalRows] = useState(null);
-  const [savedPendingOrders, setSavedPendingOrders] = useState([]);
-  const [manualBuiltRows, setManualBuiltRows] = useState(null);
-  const [manualLocations, setManualLocations] = useState([]);
+  // Loaded once at mount; never changes — used only for initial state values
+  const _s = useRef(loadSession()).current;
+
+  const [step, setStep] = useState(_s?.step ?? 0);
+  const [buildMode, setBuildMode] = useState(_s?.buildMode ?? "upload");
+  const [fileData, setFileData] = useState(_s?.fileData ?? null);
+  const [mapping, setMapping] = useState(_s?.mapping ?? null);
+  const [targetDays, setTargetDays] = useState(_s?.targetDays ?? 14);
+  const [usageConfig, setUsageConfig] = useState(_s?.usageConfig ?? null);
+  const [manualEntry, setManualEntry] = useState(_s?.manualEntry ?? null);
+  const [orderLimits, setOrderLimits] = useState(_s?.orderLimits ?? null);
+  const [finalRows, setFinalRows] = useState(_s?.finalRows ?? null);
+  const [savedPendingOrders, setSavedPendingOrders] = useState(() => {
+    const pos = _s?.savedPendingOrders;
+    if (!pos?.length) return [];
+    return pos.map(po => ({ ...po, _index: buildPendingIndex(po) }));
+  });
+  const [manualBuiltRows, setManualBuiltRows] = useState(_s?.manualBuiltRows ?? null);
+  const [manualLocations, setManualLocations] = useState(_s?.manualLocations ?? []);
   const [snakeOpen, setSnakeOpen] = useState(false);
   useEffect(() => { setSnakeOpen(false); }, [step]);
-  const [savedMapState, setSavedMapState] = useState(null);
+  const [savedMapState, setSavedMapState] = useState(_s?.savedMapState ?? null);
   const [suggestion, setSuggestion] = useState(null);
+  const [showDataSource, setShowDataSource] = useState(false);
+  const [activeConnName, setActiveConnName] = useState(_s?.activeConnName ?? null);
+
+  const [uomMappings, setUomMappings] = useState(() => loadUomMappings());
+  const [categoryUomSettings, setCategoryUomSettings] = useState(() => loadCategoryUom());
+  const [prefixSuffixRules, setPrefixSuffixRules] = useState(() => loadPrefixSuffixRules());
+
+  // Snapshot of ReviewStep's current rows — updated via callback, not state (avoids extra renders).
+  // Starts from session so a refresh on step 3 restores edited order quantities.
+  const reviewRowsRef = useRef(_s?.reviewRows ?? null);
+  const handleRowsSnapshot = useCallback((rows) => { reviewRowsRef.current = rows; }, []);
+
+  // Clear review snapshot whenever leaving step 3 (so stale rows don't leak into a fresh Review mount)
+  useEffect(() => { if (step !== 3) reviewRowsRef.current = null; }, [step]);
+
+  // Persist session on every wizard-state change so refresh lands back in the right place
+  useEffect(() => {
+    if (step === 0 && !fileData && !manualBuiltRows) { clearSession(); return; }
+    saveSession({
+      step, buildMode, fileData, mapping, targetDays, usageConfig, manualEntry,
+      orderLimits, finalRows, manualBuiltRows, manualLocations, savedMapState, activeConnName,
+      savedPendingOrders: savedPendingOrders.map(({ _index, ...rest }) => rest),
+      reviewRows: reviewRowsRef.current,
+    });
+  }, [step, buildMode, fileData, mapping, targetDays, usageConfig, manualEntry, orderLimits,
+      finalRows, savedPendingOrders, manualBuiltRows, manualLocations, savedMapState, activeConnName]);
+
+  // Also flush on unload to capture any row edits made since the last state change
+  useEffect(() => {
+    const flush = () => {
+      if (step === 0 && !fileData && !manualBuiltRows) return;
+      saveSession({
+        step, buildMode, fileData, mapping, targetDays, usageConfig, manualEntry,
+        orderLimits, finalRows, manualBuiltRows, manualLocations, savedMapState, activeConnName,
+        savedPendingOrders: savedPendingOrders.map(({ _index, ...rest }) => rest),
+        reviewRows: reviewRowsRef.current,
+      });
+    };
+    window.addEventListener("beforeunload", flush);
+    return () => window.removeEventListener("beforeunload", flush);
+  }, [step, buildMode, fileData, mapping, targetDays, usageConfig, manualEntry, orderLimits,
+      finalRows, savedPendingOrders, manualBuiltRows, manualLocations, savedMapState, activeConnName]);
 
   const handleFileUploaded = (d) => {
+    reviewRowsRef.current = null;
     setFileData(d);
     setSavedMapState(null);
     setSuggestion(findBestSavedMapping(d.headers));
     setStep(1);
   };
 
-  const [uomMappings, setUomMappings] = useState(() => loadUomMappings());
-  const [categoryUomSettings, setCategoryUomSettings] = useState(() => loadCategoryUom());
-  const [prefixSuffixRules, setPrefixSuffixRules] = useState(() => loadPrefixSuffixRules());
-
   const handleMapConfirm = (m, td, uc, me, ol, ms) => {
+    reviewRowsRef.current = null;
     setMapping(m); setTargetDays(td); setUsageConfig(uc);
     setManualEntry(me); setOrderLimits(ol);
     setSavedMapState(ms);
@@ -49,6 +97,7 @@ export default function App() {
   };
 
   const handleUomConfirm = (uomMaps, catUom, psRules) => {
+    reviewRowsRef.current = null;
     setUomMappings(uomMaps);
     setCategoryUomSettings(catUom);
     setPrefixSuffixRules(psRules);
@@ -56,6 +105,7 @@ export default function App() {
   };
 
   const handleManualBuildConfirm = (rows, locs) => {
+    reviewRowsRef.current = null;
     setManualBuiltRows(rows);
     setManualLocations(locs);
     setStep(3);
@@ -66,10 +116,8 @@ export default function App() {
     else setStep(2);
   };
 
-  const [showDataSource, setShowDataSource] = useState(false);
-  const [activeConnName, setActiveConnName] = useState(null);
-
   const handleLoadFromSource = (data, connName) => {
+    reviewRowsRef.current = null;
     setShowDataSource(false);
     setActiveConnName(connName);
     setMapping(null); setUsageConfig(null); setManualEntry(null);
@@ -80,6 +128,8 @@ export default function App() {
   };
 
   const handleNewOrder = () => {
+    clearSession();
+    reviewRowsRef.current = null;
     setStep(0);
     setBuildMode("upload");
     setFileData(null);
@@ -164,8 +214,9 @@ export default function App() {
               uomMappings={uomMappings} categoryUomSettings={categoryUomSettings} prefixSuffixRules={prefixSuffixRules}
               initialPendingOrders={savedPendingOrders}
               isManualBuild={buildMode === "manual"}
-              initialRows={buildMode === "manual" ? manualBuiltRows : null}
+              initialRows={buildMode === "manual" ? manualBuiltRows : (reviewRowsRef.current ?? null)}
               manualLocations={buildMode === "manual" ? manualLocations : []}
+              onRowsSnapshot={handleRowsSnapshot}
               onConfirm={(rows, pos) => { setFinalRows(rows); setSavedPendingOrders(pos || []); setStep(4); }}
               onBack={handleReviewBack} />
           </ErrorBoundary>

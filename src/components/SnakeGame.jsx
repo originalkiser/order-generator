@@ -205,7 +205,7 @@ export function SnakeGame({ onClose }) {
     else document.exitFullscreen();
   };
 
-  const swipeZoneH = Math.round(ROWS * cellSize * 0.65);
+  const swipeZoneH = Math.round(ROWS * cellSize * 1.3);
   const fsScale = isFullscreen
     ? Math.max(1, Math.min(
         (window.innerWidth * 0.92) / (COLS * cellSize),
