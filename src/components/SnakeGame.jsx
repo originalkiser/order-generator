@@ -228,7 +228,11 @@ export function SnakeGame({ onClose }) {
   useEffect(() => {
     const zone = swipeZoneRef.current;
     if (!zone || ctrlMode !== "swipe") return;
-    const onStart = (e) => { const t = e.touches[0]; touchStartRef.current = { x: t.clientX, y: t.clientY }; e.preventDefault(); };
+    const onStart = (e) => {
+      // Let button taps bubble through so onClick fires normally
+      if (e.target.closest("button")) return;
+      const t = e.touches[0]; touchStartRef.current = { x: t.clientX, y: t.clientY }; e.preventDefault();
+    };
     const onMove = (e) => {
       if (!touchStartRef.current) return;
       const t = e.touches[0];
