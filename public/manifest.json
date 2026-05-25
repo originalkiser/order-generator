@@ -1,0 +1,12 @@
+{
+  "name": "OrderGen",
+  "short_name": "OrderGen",
+  "description": "Inventory-driven order planning",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f1117",
+  "theme_color": "#4f8ef7",
+  "icons": [
+    { "src": "/logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

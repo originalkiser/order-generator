@@ -3,6 +3,32 @@ import * as XLSX from "xlsx";
 import { useC } from "../context/theme.jsx";
 import { Btn, DataPreview } from "../components/ui.jsx";
 
+// ── Built-in demo dataset ─────────────────────────────────────────────────────
+const DEMO_HEADERS = ["Location", "Product", "Category", "On Hand", "Daily Usage", "Lead Time (days)", "Cost"];
+const DEMO_ROWS = [
+  ["Store 001", "ITEM-A101", "Cleaning",    48,    4.2,  7,  12.50],
+  ["Store 001", "ITEM-B205", "Hardware",     6,    1.5, 14,  89.99],
+  ["Store 001", "ITEM-C012", "Electrical", 120,    2.8,  3,   4.25],
+  ["Store 001", "ITEM-D340", "Plumbing",     0,    0.9, 10,  34.00],
+  ["Store 001", "ITEM-E099", "Safety",      32,    3.6,  5,   8.75],
+  ["Store 001", "ITEM-F777", "Cleaning",    15,    5.1,  7,   6.99],
+  ["Store 001", "ITEM-G288", "Hardware",     3,    0.7, 21, 125.00],
+  ["Store 002", "ITEM-A101", "Cleaning",    22,    3.8,  7,  12.50],
+  ["Store 002", "ITEM-B205", "Hardware",    18,    2.1, 14,  89.99],
+  ["Store 002", "ITEM-C012", "Electrical",  45,    1.9,  3,   4.25],
+  ["Store 002", "ITEM-D340", "Plumbing",    14,    1.2, 10,  34.00],
+  ["Store 002", "ITEM-E099", "Safety",       0,    2.2,  5,   8.75],
+  ["Store 002", "ITEM-H411", "Plumbing",    24,    1.1, 10,  18.50],
+  ["Store 002", "ITEM-I520", "Electrical",  60,    3.3,  7,  22.75],
+  ["Warehouse",  "ITEM-A101", "Cleaning",  350,   28.5,  7,  11.00],
+  ["Warehouse",  "ITEM-B205", "Hardware",   42,    8.2, 14,  82.00],
+  ["Warehouse",  "ITEM-C012", "Electrical",680,   18.6,  3,   3.90],
+  ["Warehouse",  "ITEM-D340", "Plumbing",  110,    5.4, 10,  31.00],
+  ["Warehouse",  "ITEM-E099", "Safety",     95,    4.4,  5,   8.00],
+  ["Warehouse",  "ITEM-J630", "Safety",      0,    6.8,  5,  15.25],
+];
+const DEMO_FILE = { fileName: "demo_inventory.csv", headers: DEMO_HEADERS, rows: DEMO_ROWS, skippedRows: 0 };
+
 function downloadTemplates() {
   const wb = XLSX.utils.book_new();
 
@@ -124,14 +150,28 @@ export function UploadStep({ onData, onManualBuild }) {
         <p style={{ color: C.muted, marginTop: 8 }}>Accepts .xlsx, .xls, or .csv — we'll read the first sheet</p>
       </div>
       {!preview ? (
-        <div onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
-          onDrop={(e) => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); }}
-          onClick={() => inputRef.current.click()}
-          style={{ maxWidth: 520, margin: "0 auto", width: "100%", border: `2px dashed ${dragging ? C.accent : C.border}`, borderRadius: 16, padding: "56px 32px", textAlign: "center", cursor: "pointer", background: dragging ? C.accent + "0a" : C.card, transition: "all .2s" }}>
-          <div style={{ fontSize: 48, marginBottom: 16 }}>📊</div>
-          <p style={{ color: C.text, fontWeight: 700, margin: 0 }}>Drag & drop your spreadsheet here</p>
-          <p style={{ color: C.muted, marginTop: 8, marginBottom: 20 }}>or click to browse</p>
-          <Btn variant="ghost" onClick={(e) => { e.stopPropagation(); inputRef.current.click(); }}>Browse Files</Btn>
+        <div style={{ maxWidth: 520, margin: "0 auto", width: "100%", display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* Drop zone */}
+          <div onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
+            onDrop={(e) => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); }}
+            onClick={() => inputRef.current.click()}
+            style={{ border: `2px dashed ${dragging ? C.accent : C.border}`, borderRadius: 16, padding: "48px 32px", textAlign: "center", cursor: "pointer", background: dragging ? C.accent + "0a" : C.card, transition: "all .2s" }}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>📊</div>
+            <p style={{ color: C.text, fontWeight: 700, margin: 0 }}>Drag & drop your spreadsheet here</p>
+            <p style={{ color: C.muted, marginTop: 8, marginBottom: 20 }}>or click to browse</p>
+            <Btn variant="ghost" onClick={(e) => { e.stopPropagation(); inputRef.current.click(); }}>Browse Files</Btn>
+          </div>
+          {/* Demo data option */}
+          <button onClick={() => setPreview(DEMO_FILE)}
+            style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 24px", cursor: "pointer", fontFamily: "inherit", textAlign: "center", transition: "all .2s", display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.background = C.accent + "0a"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.surface; }}>
+            <span style={{ fontSize: 22 }}>🎯</span>
+            <div style={{ textAlign: "left" }}>
+              <div style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>Try with demo data</div>
+              <div style={{ color: C.muted, fontSize: 12 }}>20 products · 3 locations · categories, usage & cost — no file needed</div>
+            </div>
+          </button>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>

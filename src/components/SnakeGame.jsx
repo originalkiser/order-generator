@@ -21,6 +21,8 @@ export function SnakeGame({ onClose }) {
     food: { x: 4, y: 4 }, score: 0, gameOver: false, started: false,
   });
   const [display, setDisplay] = useState({ score: 0, gameOver: false, started: false });
+  const [demoMode, setDemoMode] = useState(false);
+  const demoModeRef = useRef(false);
   const [leaderboard, setLeaderboard] = useState(() => {
     try { return JSON.parse(localStorage.getItem("ordergen_snake_lb") || "[]"); } catch { return []; }
   });
@@ -33,6 +35,30 @@ export function SnakeGame({ onClose }) {
     return pos;
   };
 
+  // Simple greedy AI for demo mode
+  const getAiDir = () => {
+    const st = stateRef.current;
+    const head = st.snake[0];
+    const dirs = [{ x: 0, y: -1 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 }];
+    // Filter out reversals
+    const possible = dirs.filter(d => d.x !== -st.dir.x || d.y !== -st.dir.y);
+    // Filter collisions with walls and self (leave tail out — it will move)
+    const safe = possible.filter(d => {
+      const nx = head.x + d.x, ny = head.y + d.y;
+      if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) return false;
+      if (st.snake.slice(0, -1).some(s => s.x === nx && s.y === ny)) return false;
+      return true;
+    });
+    if (!safe.length) return st.dir;
+    // Score by Manhattan distance to food; small random factor prevents loops
+    const scored = safe.map(d => ({
+      dir: d,
+      dist: Math.abs(head.x + d.x - st.food.x) + Math.abs(head.y + d.y - st.food.y) + Math.random() * 0.4,
+    }));
+    scored.sort((a, b) => a.dist - b.dist);
+    return scored[0].dir;
+  };
+
   const draw = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -41,23 +67,19 @@ export function SnakeGame({ onClose }) {
     const CS = cellRef.current;
     const light = lightModeRef.current;
 
-    // Background
     ctx.fillStyle = light ? "#f0f4f8" : "#0f1117";
     ctx.fillRect(0, 0, COLS * CS, ROWS * CS);
 
-    // Grid dots
     ctx.fillStyle = light ? "#b8c4d8" : "#3a4a6e";
     const dot = Math.floor(CS * 0.4);
     for (let x = 0; x < COLS; x++) for (let y = 0; y < ROWS; y++)
       ctx.fillRect(x * CS + dot, y * CS + dot, 2, 2);
 
-    // Food
     ctx.fillStyle = "#e74c3c";
     ctx.beginPath();
     ctx.arc(st.food.x * CS + CS / 2, st.food.y * CS + CS / 2, CS / 2 - 1, 0, Math.PI * 2);
     ctx.fill();
 
-    // Snake
     st.snake.forEach((seg, i) => {
       ctx.fillStyle = light
         ? (i === 0 ? "#1a56d6" : i % 2 === 0 ? "#3470c8" : "#2258a8")
@@ -67,18 +89,20 @@ export function SnakeGame({ onClose }) {
       ctx.roundRect(seg.x * CS + 1, seg.y * CS + 1, CS - 2, CS - 2, r);
       ctx.fill();
     });
-
-    // Dim overlay when not yet started (HTML button handles the actual prompt)
-    if (!st.started) {
-      ctx.fillStyle = light ? "rgba(240,244,248,0.72)" : "rgba(15,17,23,0.8)";
-      ctx.fillRect(0, 0, COLS * CS, ROWS * CS);
-    }
   };
 
-  const endGame = () => {
+  const endGame = (isDemo) => {
     const st = stateRef.current;
     st.gameOver = true;
     clearInterval(loopRef.current);
+
+    if (isDemo) {
+      // Auto-restart demo after a pause
+      draw();
+      setTimeout(() => { if (demoModeRef.current) startDemo(); }, 1800);
+      return;
+    }
+
     try {
       const lb = JSON.parse(localStorage.getItem("ordergen_snake_lb") || "[]");
       lb.push({ score: st.score, date: new Date().toLocaleDateString() });
@@ -88,30 +112,29 @@ export function SnakeGame({ onClose }) {
       setLeaderboard(top);
     } catch {}
     setDisplay({ score: st.score, gameOver: true, started: true });
+    // Draw semi-transparent overlay — HTML handles the button/text
     const canvas = canvasRef.current;
     if (canvas) {
       const ctx = canvas.getContext("2d");
       const CS = cellRef.current;
       const light = lightModeRef.current;
-      ctx.fillStyle = light ? "rgba(240,244,248,0.82)" : "rgba(15,17,23,0.75)";
+      ctx.fillStyle = light ? "rgba(240,244,248,0.80)" : "rgba(15,17,23,0.75)";
       ctx.fillRect(0, 0, COLS * CS, ROWS * CS);
-      ctx.fillStyle = "#e74c3c";
-      ctx.font = "bold 13px monospace";
-      ctx.textAlign = "center";
-      ctx.fillText("GAME OVER", COLS * CS / 2, ROWS * CS / 2 - 18);
-      ctx.fillStyle = light ? "#333" : "#e8ecf4";
-      ctx.font = "11px monospace";
-      ctx.fillText("Score: " + st.score, COLS * CS / 2, ROWS * CS / 2 - 2);
     }
   };
 
   const tick = () => {
     const st = stateRef.current;
     if (st.gameOver) return;
+    const isDemo = demoModeRef.current;
+    if (isDemo) {
+      const aiDir = getAiDir();
+      if (aiDir.x !== -st.dir.x || aiDir.y !== -st.dir.y) st.nextDir = aiDir;
+    }
     st.dir = st.nextDir;
     const head = { x: st.snake[0].x + st.dir.x, y: st.snake[0].y + st.dir.y };
     if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS || st.snake.some(s => s.x === head.x && s.y === head.y)) {
-      endGame(); return;
+      endGame(isDemo); return;
     }
     const ate = head.x === st.food.x && head.y === st.food.y;
     const newSnake = [head, ...st.snake];
@@ -122,7 +145,23 @@ export function SnakeGame({ onClose }) {
     setDisplay(d => ({ ...d, score: st.score }));
   };
 
+  const startDemo = () => {
+    demoModeRef.current = true;
+    setDemoMode(true);
+    const st = stateRef.current;
+    st.snake = [{ x: 10, y: 10 }, { x: 9, y: 10 }, { x: 8, y: 10 }];
+    st.dir = { x: 1, y: 0 }; st.nextDir = { x: 1, y: 0 };
+    st.food = randomFood(st.snake);
+    st.score = 0; st.gameOver = false; st.started = true;
+    setDisplay({ score: 0, gameOver: false, started: true });
+    clearInterval(loopRef.current);
+    loopRef.current = setInterval(tick, 120);
+    draw();
+  };
+
   const startGame = () => {
+    demoModeRef.current = false;
+    setDemoMode(false);
     const st = stateRef.current;
     st.snake = [{ x: 10, y: 10 }, { x: 9, y: 10 }, { x: 8, y: 10 }];
     st.dir = { x: 1, y: 0 }; st.nextDir = { x: 1, y: 0 };
@@ -137,10 +176,16 @@ export function SnakeGame({ onClose }) {
   const steer = (nd) => {
     const st = stateRef.current;
     if (!st.started || st.gameOver) return;
+    if (demoModeRef.current) { startGame(); return; } // any steer in demo → take over
     if (nd.x !== -st.dir.x || nd.y !== -st.dir.y) st.nextDir = nd;
   };
 
-  useEffect(() => { draw(); return () => clearInterval(loopRef.current); }, []); // eslint-disable-line
+  // Mount: draw idle state, then kick off demo after a short delay
+  useEffect(() => {
+    draw();
+    const t = setTimeout(startDemo, 1400);
+    return () => { clearTimeout(t); clearInterval(loopRef.current); };
+  }, []); // eslint-disable-line
 
   useEffect(() => {
     const D = { ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 }, ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 }, w: { x: 0, y: -1 }, s: { x: 0, y: 1 }, a: { x: -1, y: 0 }, d: { x: 1, y: 0 } };
@@ -208,10 +253,8 @@ export function SnakeGame({ onClose }) {
     else document.exitFullscreen();
   };
 
-  // Swipe zone matches canvas height
   const swipeZoneH = ROWS * cellSize;
 
-  // Scale to fit screen in fullscreen — can scale below 1 to avoid cutoff
   const fsScale = isFullscreen
     ? Math.min(
         (window.innerWidth * 0.96) / (COLS * cellSize),
@@ -234,20 +277,62 @@ export function SnakeGame({ onClose }) {
     <button onClick={onClick} title={title} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "0 3px" }}>{label}</button>
   );
 
-  // Button overlay centered on canvas — only visible before start or on game over
-  const canvasOverlay = (!display.started || display.gameOver) && (
-    <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, pointerEvents: "auto", zIndex: 10 }}>
-      <button onClick={startGame} style={{
-        background: display.gameOver ? "#e74c3c" : C.accent,
-        border: "none", borderRadius: 8, color: "#fff",
-        fontFamily: "inherit", fontWeight: 800, fontSize: 13,
-        padding: "9px 24px", cursor: "pointer",
-        boxShadow: "0 2px 16px rgba(0,0,0,0.35)", letterSpacing: 0.5,
-        whiteSpace: "nowrap",
-      }}>
-        {display.gameOver ? "↺ Restart" : "▶ Start"}
+  // ── Canvas overlay (non-swipe modes) ──────────────────────────────────────
+  // In swipe mode this is replaced by content rendered inside the swipe zone.
+  const canvasOverlayNonSwipe = ctrlMode !== "swipe" && (
+    demoMode ? (
+      // Demo running: small "Take over" prompt at bottom of canvas
+      <div style={{ position: "absolute", bottom: 10, left: "50%", transform: "translateX(-50%)", zIndex: 10, pointerEvents: "auto" }}>
+        <button onClick={startGame} style={{ background: "rgba(79,142,247,0.88)", border: "none", borderRadius: 7, color: "#fff", fontFamily: "inherit", fontWeight: 800, fontSize: 11, padding: "6px 16px", cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,0.3)", whiteSpace: "nowrap" }}>
+          ▶ Play
+        </button>
+      </div>
+    ) : (!display.started || display.gameOver) ? (
+      <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 8, pointerEvents: "auto", zIndex: 10 }}>
+        {display.gameOver && (
+          <span style={{ color: "#e74c3c", fontWeight: 800, fontSize: 13, fontFamily: "monospace", textShadow: "0 1px 4px rgba(0,0,0,0.5)" }}>GAME OVER</span>
+        )}
+        <button onClick={startGame} style={{ background: display.gameOver ? "#e74c3c" : C.accent, border: "none", borderRadius: 8, color: "#fff", fontFamily: "inherit", fontWeight: 800, fontSize: 13, padding: "9px 24px", cursor: "pointer", boxShadow: "0 2px 16px rgba(0,0,0,0.35)", letterSpacing: 0.5, whiteSpace: "nowrap" }}>
+          {display.gameOver ? "↺ Restart" : "▶ Start"}
+        </button>
+      </div>
+    ) : null
+  );
+
+  // ── Swipe zone content — changes by game state ─────────────────────────────
+  const swipeZoneContent = demoMode ? (
+    // Demo playing: prompt user to take over by tapping the swipe zone
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, pointerEvents: "auto" }}>
+      <span style={{ color: C.muted, fontSize: 12, fontWeight: 700, letterSpacing: 1 }}>DEMO MODE</span>
+      <button onClick={startGame} style={{ background: C.accent, border: "none", borderRadius: 8, color: "#fff", fontFamily: "inherit", fontWeight: 800, fontSize: 13, padding: "9px 24px", cursor: "pointer", boxShadow: "0 2px 12px rgba(0,0,0,0.25)" }}>
+        ▶ Play
+      </button>
+      <span style={{ color: C.border, fontSize: 11 }}>or swipe above to take control</span>
+    </div>
+  ) : display.gameOver ? (
+    // Game over in swipe mode — show score + restart, no overlap with canvas
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, pointerEvents: "auto" }}>
+      <span style={{ color: "#e74c3c", fontWeight: 800, fontSize: 15, fontFamily: "monospace" }}>GAME OVER</span>
+      <span style={{ color: C.text, fontWeight: 700, fontSize: 14, fontFamily: "monospace" }}>Score: {display.score}</span>
+      <button onClick={startGame} style={{ background: "#e74c3c", border: "none", borderRadius: 8, color: "#fff", fontFamily: "inherit", fontWeight: 800, fontSize: 13, padding: "9px 24px", cursor: "pointer", boxShadow: "0 2px 12px rgba(0,0,0,0.3)" }}>
+        ↺ Restart
       </button>
     </div>
+  ) : !display.started ? (
+    // Not yet started
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, pointerEvents: "auto" }}>
+      <button onClick={startGame} style={{ background: C.accent, border: "none", borderRadius: 8, color: "#fff", fontFamily: "inherit", fontWeight: 800, fontSize: 13, padding: "9px 24px", cursor: "pointer", boxShadow: "0 2px 12px rgba(0,0,0,0.25)" }}>
+        ▶ Start
+      </button>
+      <span style={{ color: C.muted, fontSize: 12 }}>or swipe above to begin</span>
+    </div>
+  ) : (
+    // Playing — normal swipe prompt
+    <>
+      <span style={{ fontSize: 36, lineHeight: 1 }}>👆</span>
+      <span style={{ color: C.muted, fontSize: 13 }}>Swipe here to steer</span>
+      <span style={{ color: C.border, fontSize: 11 }}>↑ ↓ ← →</span>
+    </>
   );
 
   const controlsSection = (
@@ -318,7 +403,10 @@ export function SnakeGame({ onClose }) {
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: COLS * cellSize }}>
-          <span style={{ color: C.accent, fontWeight: 800, fontSize: 13, fontFamily: "monospace" }}>🐍 SNAKE · {display.score}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ color: C.accent, fontWeight: 800, fontSize: 13, fontFamily: "monospace" }}>🐍 SNAKE · {display.score}</span>
+            {demoMode && <span style={{ color: C.muted, fontSize: 9, fontWeight: 700, letterSpacing: 1, border: `1px solid ${C.border}`, borderRadius: 4, padding: "1px 5px" }}>DEMO</span>}
+          </div>
           <div style={{ display: "flex", gap: 2, alignItems: "center" }}>
             {iconBtn(lightMode ? "Dark theme" : "Light theme", lightMode ? "🌙" : "☀️", () => setLightMode(v => !v))}
             {iconBtn(isFullscreen ? "Exit fullscreen" : "Full screen", isFullscreen ? "⊠" : "⛶", toggleFullscreen)}
@@ -328,16 +416,12 @@ export function SnakeGame({ onClose }) {
 
         {ctrlMode === "swipe" ? (
           <>
+            {/* Canvas has no HTML overlay — swipe zone handles all state prompts */}
             <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-              <div style={{ position: "relative" }}>
-                <canvas ref={canvasRef} width={COLS * cellSize} height={ROWS * cellSize}
-                  style={{ display: "block", borderRadius: "6px 6px 0 0", border: `1px solid ${C.border}`, borderBottom: "none", imageRendering: "pixelated", touchAction: "none" }} />
-                {canvasOverlay}
-              </div>
+              <canvas ref={canvasRef} width={COLS * cellSize} height={ROWS * cellSize}
+                style={{ display: "block", borderRadius: "6px 6px 0 0", border: `1px solid ${C.border}`, borderBottom: "none", imageRendering: "pixelated", touchAction: "none" }} />
               <div ref={swipeZoneRef} style={{ width: COLS * cellSize, height: swipeZoneH, background: lightMode ? "#dce6f0" : C.card, border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 6px 6px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", touchAction: "none", userSelect: "none", gap: 8, cursor: "default" }}>
-                <span style={{ fontSize: 36, lineHeight: 1 }}>👆</span>
-                <span style={{ color: C.muted, fontSize: 13 }}>Swipe here to steer</span>
-                <span style={{ color: C.border, fontSize: 11 }}>↑ ↓ ← →</span>
+                {swipeZoneContent}
               </div>
             </div>
             {controlsSection}
@@ -347,7 +431,7 @@ export function SnakeGame({ onClose }) {
             <div style={{ position: "relative" }}>
               <canvas ref={canvasRef} width={COLS * cellSize} height={ROWS * cellSize}
                 style={{ display: "block", borderRadius: 6, border: `1px solid ${C.border}`, imageRendering: "pixelated", touchAction: "none" }} />
-              {canvasOverlay}
+              {canvasOverlayNonSwipe}
             </div>
             {controlsSection}
             {ctrlMode === "dpad" && (
