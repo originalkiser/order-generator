@@ -23,6 +23,8 @@ export function SnakeGame({ onClose }) {
   const [display, setDisplay] = useState({ score: 0, gameOver: false, started: false });
   const [demoMode, setDemoMode] = useState(false);
   const demoModeRef = useRef(false);
+  // rank in top-7 leaderboard (1-based); 0 = not ranked; null = no game yet
+  const [gameOverRank, setGameOverRank] = useState(null);
   const [leaderboard, setLeaderboard] = useState(() => {
     try { return JSON.parse(localStorage.getItem("ordergen_snake_lb") || "[]"); } catch { return []; }
   });
@@ -103,6 +105,7 @@ export function SnakeGame({ onClose }) {
       return;
     }
 
+    let rank = 0;
     try {
       const lb = JSON.parse(localStorage.getItem("ordergen_snake_lb") || "[]");
       lb.push({ score: st.score, date: new Date().toLocaleDateString() });
@@ -110,7 +113,10 @@ export function SnakeGame({ onClose }) {
       const top = lb.slice(0, 7);
       localStorage.setItem("ordergen_snake_lb", JSON.stringify(top));
       setLeaderboard(top);
+      // rank = position of this score in the saved top-7 (1-based)
+      rank = top.findIndex(e => e.score === st.score) + 1; // findIndex = first (highest) match
     } catch {}
+    setGameOverRank(rank);
     setDisplay({ score: st.score, gameOver: true, started: true });
     // Draw semi-transparent overlay — HTML handles the button/text
     const canvas = canvasRef.current;
@@ -162,6 +168,7 @@ export function SnakeGame({ onClose }) {
   const startGame = () => {
     demoModeRef.current = false;
     setDemoMode(false);
+    setGameOverRank(null);
     const st = stateRef.current;
     st.snake = [{ x: 10, y: 10 }, { x: 9, y: 10 }, { x: 8, y: 10 }];
     st.dir = { x: 1, y: 0 }; st.nextDir = { x: 1, y: 0 };
@@ -277,6 +284,34 @@ export function SnakeGame({ onClose }) {
     <button onClick={onClick} title={title} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "0 3px" }}>{label}</button>
   );
 
+  // ── Rank helpers ──────────────────────────────────────────────────────────
+  const rankMedals  = ["🥇", "🥈", "🥉", "4th", "5th", "6th", "7th"];
+  const rankColors  = ["#f1c40f", "#adb5bd", "#cd7f32", C.muted, C.muted, C.muted, C.muted];
+  const rankText = (r) =>
+    r === 1 ? "🥇 New High Score!" :
+    r === 2 ? "🥈 #2 High Score!"  :
+    r === 3 ? "🥉 #3 High Score!"  :
+    r >= 4   ? `${rankMedals[r-1]} #${r} High Score` : null;
+
+  const ScorePanel = ({ compact = false }) => (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: compact ? 4 : 6 }}>
+      <span style={{ color: "#e74c3c", fontWeight: 800, fontSize: compact ? 12 : 13, fontFamily: "monospace", textShadow: "0 1px 4px rgba(0,0,0,0.45)", letterSpacing: 1 }}>
+        GAME OVER
+      </span>
+      <span style={{ color: "#fff", fontWeight: 800, fontSize: compact ? 28 : 32, fontFamily: "monospace", lineHeight: 1, textShadow: "0 2px 8px rgba(0,0,0,0.5)" }}>
+        {display.score}
+      </span>
+      {gameOverRank > 0 && rankText(gameOverRank) && (
+        <span style={{ color: rankColors[gameOverRank - 1], fontWeight: 700, fontSize: compact ? 11 : 12, whiteSpace: "nowrap", textShadow: "0 1px 4px rgba(0,0,0,0.4)" }}>
+          {rankText(gameOverRank)}
+        </span>
+      )}
+      {gameOverRank === 0 && (
+        <span style={{ color: C.muted, fontSize: 11 }}>Not ranked yet</span>
+      )}
+    </div>
+  );
+
   // ── Canvas overlay (non-swipe modes) ──────────────────────────────────────
   // In swipe mode this is replaced by content rendered inside the swipe zone.
   const canvasOverlayNonSwipe = ctrlMode !== "swipe" && (
@@ -287,13 +322,17 @@ export function SnakeGame({ onClose }) {
           ▶ Play
         </button>
       </div>
-    ) : (!display.started || display.gameOver) ? (
+    ) : display.gameOver ? (
+      <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 10, pointerEvents: "auto", zIndex: 10 }}>
+        <ScorePanel compact />
+        <button onClick={startGame} style={{ background: "#e74c3c", border: "none", borderRadius: 8, color: "#fff", fontFamily: "inherit", fontWeight: 800, fontSize: 13, padding: "8px 22px", cursor: "pointer", boxShadow: "0 2px 16px rgba(0,0,0,0.35)", letterSpacing: 0.5, whiteSpace: "nowrap" }}>
+          ↺ Restart
+        </button>
+      </div>
+    ) : !display.started ? (
       <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 8, pointerEvents: "auto", zIndex: 10 }}>
-        {display.gameOver && (
-          <span style={{ color: "#e74c3c", fontWeight: 800, fontSize: 13, fontFamily: "monospace", textShadow: "0 1px 4px rgba(0,0,0,0.5)" }}>GAME OVER</span>
-        )}
-        <button onClick={startGame} style={{ background: display.gameOver ? "#e74c3c" : C.accent, border: "none", borderRadius: 8, color: "#fff", fontFamily: "inherit", fontWeight: 800, fontSize: 13, padding: "9px 24px", cursor: "pointer", boxShadow: "0 2px 16px rgba(0,0,0,0.35)", letterSpacing: 0.5, whiteSpace: "nowrap" }}>
-          {display.gameOver ? "↺ Restart" : "▶ Start"}
+        <button onClick={startGame} style={{ background: C.accent, border: "none", borderRadius: 8, color: "#fff", fontFamily: "inherit", fontWeight: 800, fontSize: 13, padding: "9px 24px", cursor: "pointer", boxShadow: "0 2px 16px rgba(0,0,0,0.35)", letterSpacing: 0.5, whiteSpace: "nowrap" }}>
+          ▶ Start
         </button>
       </div>
     ) : null
@@ -310,10 +349,9 @@ export function SnakeGame({ onClose }) {
       <span style={{ color: C.border, fontSize: 11 }}>or swipe above to take control</span>
     </div>
   ) : display.gameOver ? (
-    // Game over in swipe mode — show score + restart, no overlap with canvas
+    // Game over in swipe mode — score + rank + restart, fully inside zone (no canvas overlap)
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, pointerEvents: "auto" }}>
-      <span style={{ color: "#e74c3c", fontWeight: 800, fontSize: 15, fontFamily: "monospace" }}>GAME OVER</span>
-      <span style={{ color: C.text, fontWeight: 700, fontSize: 14, fontFamily: "monospace" }}>Score: {display.score}</span>
+      <ScorePanel />
       <button onClick={startGame} style={{ background: "#e74c3c", border: "none", borderRadius: 8, color: "#fff", fontFamily: "inherit", fontWeight: 800, fontSize: 13, padding: "9px 24px", cursor: "pointer", boxShadow: "0 2px 12px rgba(0,0,0,0.3)" }}>
         ↺ Restart
       </button>
