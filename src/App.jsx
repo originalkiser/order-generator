@@ -4,6 +4,7 @@ import { useTheme } from "./context/theme.jsx";
 import { loadUomMappings, loadCategoryUom, loadPrefixSuffixRules, findBestSavedMapping, saveSession, loadSession, clearSession } from "./utils/storage.js";
 import { buildPendingIndex } from "./utils/calc.js";
 import { ErrorBoundary } from "./components/ui.jsx";
+import { HintsToggle } from "./components/HintCard.jsx";
 import { SnakeGame } from "./components/SnakeGame.jsx";
 import { StepBar } from "./components/StepBar.jsx";
 import { DataSourcePanel } from "./panels/DataSourcePanel.jsx";
@@ -162,6 +163,7 @@ export default function App() {
             {activeConnName && <span style={{ color: C.accent, marginLeft: 8 }}>· {activeConnName}</span>}
           </div>
         </div>
+        <HintsToggle />
         <button onClick={toggleTheme} title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, color: C.muted, fontFamily: "inherit", fontSize: 16, cursor: "pointer", padding: "6px 10px", lineHeight: 1, transition: "all .15s" }}
           onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
           onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.muted; }}>

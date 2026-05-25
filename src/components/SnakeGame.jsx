@@ -73,7 +73,7 @@ export function SnakeGame({ onClose }) {
     ctx.fillRect(0, 0, COLS * CS, ROWS * CS);
 
     ctx.fillStyle = light ? "#b8c4d8" : "#3a4a6e";
-    const dot = Math.floor(CS * 0.4);
+    const dot = Math.floor(CS / 2) - 1;
     for (let x = 0; x < COLS; x++) for (let y = 0; y < ROWS; y++)
       ctx.fillRect(x * CS + dot, y * CS + dot, 2, 2);
 

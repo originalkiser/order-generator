@@ -3,6 +3,7 @@ import { REQUIRED_CORE, MANUAL_ENTRY_FIELDS, FIELD_LABELS } from "../constants.j
 import { useC } from "../context/theme.jsx";
 import { Btn, Input, Select, Badge, DataPreview } from "../components/ui.jsx";
 import { saveMappingToStorage } from "../utils/storage.js";
+import { HintCard } from "../components/HintCard.jsx";
 
 export function MapStep({ headers, rows, fileName, onConfirm, initialState, suggestion }) {
   const C = useC();
@@ -118,6 +119,11 @@ export function MapStep({ headers, rows, fileName, onConfirm, initialState, sugg
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
+      <HintCard id="map-columns" title="Match your columns">
+        Tell OrderGen which column in your file represents each field.
+        <strong> Location</strong>, <strong>Product</strong>, <strong>On Hand</strong>, and <strong>Lead Time</strong> are required.
+        If your file has a <em>Daily Usage</em> column, map it — otherwise you can enter a manual usage rate on the next screen.
+      </HintCard>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
           <h2 style={{ color: C.text, fontSize: 22, fontWeight: 800, margin: 0 }}>Map Your Columns</h2>

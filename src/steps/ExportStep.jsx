@@ -5,6 +5,7 @@ import { useC } from "../context/theme.jsx";
 import { fmtNum, fmtCurrency } from "../utils/format.js";
 import { Btn, Badge, Input, Select } from "../components/ui.jsx";
 import { ColumnFilter } from "../components/ColumnFilter.jsx";
+import { HintCard } from "../components/HintCard.jsx";
 
 export function ExportStep({ rows, onBack }) {
   const C = useC();
@@ -25,6 +26,9 @@ export function ExportStep({ rows, onBack }) {
   const accountInfoFileRef = useRef();
   const [productInfo, setProductInfo] = useState(null);
   const productInfoFileRef = useRef();
+  // Export template upload
+  const templateFileRef = useRef();
+  const [templateName, setTemplateName] = useState(null);
   // Vendor grouping
   const [vendorGrouping, setVendorGrouping] = useState("none"); // "none" | "sheets" | "files"
   const [vendorColSource, setVendorColSource] = useState("product"); // "product" | "account" | "data"
@@ -70,6 +74,32 @@ export function ExportStep({ rows, onBack }) {
     reader.readAsArrayBuffer(file);
   };
 
+  const handleTemplateFile = (file) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+        if (!json.length) return;
+        const hdrs = json[0].map(h => String(h).trim()).filter(Boolean);
+        if (!hdrs.length) return;
+        const normH = s => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+        let id = nextId;
+        const newCols = hdrs.map(h => {
+          const match = STOCK_COLS.find(s => normH(s.label) === normH(h) || normH(s.key) === normH(h));
+          return match
+            ? { id: id++, type: "data", key: match.key, header: h }
+            : { id: id++, type: "blank", header: h };
+        });
+        setCols(newCols);
+        setNextId(id);
+        setTemplateName(file.name);
+      } catch {}
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
   const productLookup = productInfo ? (() => {
     const m = new Map();
     productInfo.rows.forEach(r => {
@@ -104,6 +134,12 @@ export function ExportStep({ rows, onBack }) {
       if (!acctRow || !accountInfo) return "";
       const colIdx = accountInfo.headers.indexOf(c.acctCol);
       return colIdx >= 0 ? String(acctRow[colIdx] ?? "") : "";
+    }
+    if (c.type === "date") {
+      const d = new Date();
+      if (c.dateFormat === "iso") return d.toISOString().slice(0, 10);
+      if (c.dateFormat === "us") return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+      return d.toLocaleDateString();
     }
     if (c.type === "product") {
       const prod = String(r.product ?? "").trim();
@@ -144,7 +180,7 @@ export function ExportStep({ rows, onBack }) {
   ).sort((a, b) => {
     if (!previewSortKey) return 0;
     const col = cols.find(c => c.id === previewSortKey);
-    if (!col || col.type === "blank" || col.type === "constant") return 0;
+    if (!col || col.type === "blank" || col.type === "constant" || col.type === "date") return 0;
     const av = (col.type === "account" || col.type === "product") ? resolveCell(col, a) : a[col.key];
     const bv = (col.type === "account" || col.type === "product") ? resolveCell(col, b) : b[col.key];
     return (isNaN(Number(av)) ? String(av ?? "").localeCompare(String(bv ?? "")) : Number(av) - Number(bv)) * previewSortDir;
@@ -153,6 +189,7 @@ export function ExportStep({ rows, onBack }) {
   const addData = () => { setCols(c => [...c, { id: nextId, type: "data", key: "order", header: "Order Qty" }]); setNextId(n => n + 1); };
   const addBlank = () => { setCols(c => [...c, { id: nextId, type: "blank", header: "Notes" }]); setNextId(n => n + 1); };
   const addConstant = () => { setCols(c => [...c, { id: nextId, type: "constant", value: "", header: "Custom" }]); setNextId(n => n + 1); };
+  const addDate = () => { setCols(c => [...c, { id: nextId, type: "date", header: "Order Date", dateFormat: "local" }]); setNextId(n => n + 1); };
   const addAccount = () => {
     const firstHeader = accountInfo?.headers?.[0] || "";
     setCols(c => [...c, { id: nextId, type: "account", acctCol: firstHeader, header: firstHeader }]);
@@ -268,6 +305,11 @@ export function ExportStep({ rows, onBack }) {
         <h2 style={{ color: C.text, fontSize: 22, fontWeight: 800, margin: 0 }}>Configure Export</h2>
         <p style={{ color: C.muted, marginTop: 4 }}>Build your custom column layout, then download your order file</p>
       </div>
+      <HintCard id="export-intro" title="Customise your export" icon="📤">
+        Use the <strong>Column Layout</strong> section to pick exactly which fields appear in your downloaded file — and in what order.
+        You can also upload an <strong>Account Info</strong> file to pull in store addresses or account numbers, and a <strong>Vendor Part # Mapping</strong>
+        file to translate your internal IDs to vendor item numbers automatically.
+      </HintCard>
 
       {/* order summary */}
       <div style={{ background: C.card, borderRadius: 12, padding: "18px 22px", border: `1px solid ${C.accentDim}` }}>
@@ -536,22 +578,46 @@ export function ExportStep({ rows, onBack }) {
         </div>
       </div>
 
+      {/* export template upload — hidden input */}
+      <input ref={templateFileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }}
+        onChange={e => { if (e.target.files[0]) { handleTemplateFile(e.target.files[0]); e.target.value = ""; } }} />
+
       {/* column builder */}
       <div style={{ background: C.card, borderRadius: 12, padding: "20px 24px", border: `1px solid ${C.border}` }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <span style={{ color: C.text, fontWeight: 700 }}>Column Layout</span>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, gap: 10, flexWrap: "wrap" }}>
+          <div>
+            <span style={{ color: C.text, fontWeight: 700 }}>Column Layout</span>
+            {templateName && (
+              <span style={{ color: C.green, fontSize: 11, fontWeight: 700, marginLeft: 10 }}>
+                ✓ from {templateName}
+              </span>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <button
+              onClick={() => templateFileRef.current?.click()}
+              title="Upload a previous order or any file with headers to auto-populate columns"
+              style={{ padding: "4px 10px", borderRadius: 6, fontFamily: "inherit", fontWeight: 700, fontSize: 11, cursor: "pointer", border: `1px solid ${C.border}`, background: "transparent", color: C.muted, whiteSpace: "nowrap" }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.muted; }}>
+              📋 Load from Template
+            </button>
             <Btn small variant="ghost" onClick={addData}>+ Data</Btn>
             {accountInfo && <Btn small variant="success" onClick={addAccount}>+ Account</Btn>}
             {productInfo && <Btn small variant="ghost" onClick={addProduct} style={{ color: C.purple, borderColor: C.purple + "66" }}>+ Vendor Part</Btn>}
+            <Btn small variant="ghost" onClick={addDate} style={{ color: "#06b6d4", borderColor: "#06b6d455" }}>+ Date</Btn>
             <Btn small variant="ghost" onClick={addConstant} style={{ color: C.orange, borderColor: C.orange + "66" }}>+ Constant</Btn>
             <Btn small variant="ghost" onClick={addBlank}>+ Blank</Btn>
           </div>
         </div>
+        <HintCard id="export-columns" title="Building your column layout">
+          Each column maps to a data field, account/vendor info, a static value, today's date, or a blank spacer.
+          <strong> Load from Template</strong> reads the headers from a previous order file and auto-matches them — unrecognized columns become blank spacers you can reassign.
+        </HintCard>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {cols.map((col, i) => {
-            const badgeColor = col.type === "blank" ? C.muted : col.type === "account" ? C.green : col.type === "product" ? C.purple : col.type === "constant" ? C.orange : C.accent;
-            const borderColor = col.type === "blank" ? C.border : col.type === "account" ? C.green + "55" : col.type === "product" ? C.purple + "55" : col.type === "constant" ? C.orange + "55" : C.accentDim;
+            const badgeColor = col.type === "blank" ? C.muted : col.type === "account" ? C.green : col.type === "product" ? C.purple : col.type === "constant" ? C.orange : col.type === "date" ? "#06b6d4" : C.accent;
+            const borderColor = col.type === "blank" ? C.border : col.type === "account" ? C.green + "55" : col.type === "product" ? C.purple + "55" : col.type === "constant" ? C.orange + "55" : col.type === "date" ? "#06b6d433" : C.accentDim;
             return (
               <div key={col.id} style={{ display: "flex", alignItems: "center", gap: 10, background: C.surface, borderRadius: 8, padding: "10px 14px", border: `1px solid ${borderColor}` }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -616,6 +682,23 @@ export function ExportStep({ rows, onBack }) {
                       <Input value={col.value ?? ""} onChange={(e) => update(col.id, { value: e.target.value })} placeholder="Same value for every row" style={{ width: "100%" }} />
                     </div>
                   )}
+                  {col.type === "date" && (
+                    <div style={{ flex: 1, minWidth: 200 }}>
+                      <label style={{ color: C.muted, fontSize: 10, display: "block", marginBottom: 3 }}>DATE FORMAT</label>
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 4 }}>
+                        {[["local", "Local"], ["us", "MM/DD/YYYY"], ["iso", "YYYY-MM-DD"]].map(([fmt, lbl]) => (
+                          <button key={fmt} onClick={() => update(col.id, { dateFormat: fmt })}
+                            style={{ padding: "2px 8px", borderRadius: 4, fontFamily: "inherit", fontWeight: 700, fontSize: 10, cursor: "pointer",
+                              border: `1px solid ${(col.dateFormat ?? "local") === fmt ? "#06b6d4" : C.border}`,
+                              background: (col.dateFormat ?? "local") === fmt ? "#06b6d422" : "transparent",
+                              color: (col.dateFormat ?? "local") === fmt ? "#06b6d4" : C.muted }}>
+                            {lbl}
+                          </button>
+                        ))}
+                      </div>
+                      <span style={{ color: C.muted, fontSize: 10 }}>Preview: {resolveCell(col, {})}</span>
+                    </div>
+                  )}
                 </div>
                 <Btn small variant="danger" onClick={() => remove(col.id)}>✕</Btn>
               </div>
@@ -644,10 +727,10 @@ export function ExportStep({ rows, onBack }) {
                 <tr style={{ background: C.card }}>
                   {cols.map(c => (
                     <th key={c.id} style={{ padding: "8px 12px", textAlign: "left", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", background: C.card }}>
-                      <button onClick={() => (c.type !== "blank" && c.type !== "constant") && toggleSort(c.id)}
-                        style={{ background: "none", border: "none", color: C.accent, cursor: (c.type === "blank" || c.type === "constant") ? "default" : "pointer", fontWeight: 700, fontSize: 13, padding: 0, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
+                      <button onClick={() => (c.type !== "blank" && c.type !== "constant" && c.type !== "date") && toggleSort(c.id)}
+                        style={{ background: "none", border: "none", color: C.accent, cursor: (c.type === "blank" || c.type === "constant" || c.type === "date") ? "default" : "pointer", fontWeight: 700, fontSize: 13, padding: 0, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
                         {c.header || <em style={{ color: C.muted }}>untitled</em>}
-                        {(c.type !== "blank" && c.type !== "constant") && <span style={{ color: previewSortKey === c.id ? C.accent : C.border, fontSize: 10 }}>{previewSortKey === c.id ? (previewSortDir > 0 ? "▲" : "▼") : "⇅"}</span>}
+                        {(c.type !== "blank" && c.type !== "constant" && c.type !== "date") && <span style={{ color: previewSortKey === c.id ? C.accent : C.border, fontSize: 10 }}>{previewSortKey === c.id ? (previewSortDir > 0 ? "▲" : "▼") : "⇅"}</span>}
                       </button>
                     </th>
                   ))}
@@ -655,7 +738,7 @@ export function ExportStep({ rows, onBack }) {
                 <tr style={{ background: C.surface }}>
                   {cols.map(c => (
                     <th key={c.id} style={{ padding: "4px 8px", borderBottom: `1px solid ${C.border}`, background: C.surface }}>
-                      {(c.type === "blank") ? <div style={{ height: 28 }} /> : (
+                      {(c.type === "blank" || c.type === "date") ? <div style={{ height: 28 }} /> : (
                         <input value={colFilters[c.id] || ""} onChange={e => setColFilter(c.id, e.target.value)} placeholder="Filter…"
                           style={{ width: "100%", background: C.card, border: `1px solid ${colFilters[c.id] ? C.accent : C.border}`, borderRadius: 4, color: C.text, fontFamily: "inherit", fontSize: 11, padding: "3px 7px", outline: "none", boxSizing: "border-box" }} />
                       )}
@@ -671,7 +754,7 @@ export function ExportStep({ rows, onBack }) {
                     {cols.map(c => {
                       const val = resolveCell(c, r);
                       return (
-                        <td key={c.id} style={{ padding: "7px 12px", color: c.type === "blank" ? C.muted : c.type === "constant" ? C.orange : c.type === "account" ? C.green : C.text, whiteSpace: "nowrap" }}>
+                        <td key={c.id} style={{ padding: "7px 12px", color: c.type === "blank" ? C.muted : c.type === "constant" ? C.orange : c.type === "account" ? C.green : c.type === "date" ? "#06b6d4" : C.text, whiteSpace: "nowrap" }}>
                           {c.type === "blank" ? <em style={{ color: C.border }}>—</em> : val || <em style={{ color: C.muted, fontSize: 11 }}>—</em>}
                         </td>
                       );

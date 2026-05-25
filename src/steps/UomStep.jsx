@@ -3,6 +3,7 @@ import { useC } from "../context/theme.jsx";
 import { Btn, Input } from "../components/ui.jsx";
 import { trimVal, saveUomMappings, saveCategoryUom, savePrefixSuffixRules } from "../utils/storage.js";
 import { getUomConversion, detectPrefixSuffixPatterns } from "../utils/calc.js";
+import { HintCard } from "../components/HintCard.jsx";
 
 export function UomStep({ rawRows, headers, mapping, usageConfig, manualEntry, hasCategory, hasUom, productRules, initialUomMappings, initialCategoryUomSettings, initialPrefixSuffixRules, onBack, onConfirm }) {
   const C = useC();
@@ -55,6 +56,11 @@ export function UomStep({ rawRows, headers, mapping, usageConfig, manualEntry, h
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <HintCard id="uom-intro" title="Unit of Measure mapping" icon="📐">
+        If your inventory counts items in one unit (e.g. <em>each</em>) but you order them in another (e.g. <em>case of 12</em>),
+        set the conversion here. OrderGen will use the ratio to convert on-hand quantities and calculate the correct order units.
+        If all your units are the same, just click <strong>Continue</strong> — no mapping needed.
+      </HintCard>
       <div>
         <h2 style={{ color: C.text, fontSize: 22, fontWeight: 800, margin: 0 }}>Unit of Measure</h2>
         <p style={{ color: C.muted, marginTop: 6 }}>Configure how on-hand units convert to order units</p>

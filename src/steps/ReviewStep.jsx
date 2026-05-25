@@ -6,6 +6,7 @@ import { trimVal, loadProductRules, saveProductRules, loadIgnoreMax, saveIgnoreM
 import { calcOrder, calcDaysOnHand, applyProductRule, computeSuggested, applyOnHandConstraints, getUomConversion, getUsageMultiplier, isTotalRow, buildPendingIndex, autoPendingColMap, detectPrefixSuffixPatterns } from "../utils/calc.js";
 import { Btn, DraftInput, Badge, Input, Select, OrderCalloutCard } from "../components/ui.jsx";
 import { ColumnFilter } from "../components/ColumnFilter.jsx";
+import { HintCard } from "../components/HintCard.jsx";
 
 export function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manualEntry, orderLimits, uomMappings, categoryUomSettings, prefixSuffixRules, onConfirm, onBack, initialPendingOrders = [], isManualBuild = false, initialRows = null, manualLocations = [], onRowsSnapshot = null }) {
   const hasCost = !!mapping.cost;
@@ -727,6 +728,12 @@ export function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig,
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
+      <HintCard id="review-orders" title="Review your order" icon="📋">
+        OrderGen has calculated suggested order quantities for each product and location. You can edit any quantity directly in the table.
+        Set a value to <strong>0</strong> to skip an item, or use the filter bar to focus on specific locations or categories.
+        When you're happy, click <strong>Confirm Order →</strong> to proceed to export.
+      </HintCard>
 
       {/* top action bar */}
       <ActionBar />

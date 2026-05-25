@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import * as XLSX from "xlsx";
 import { useC } from "../context/theme.jsx";
 import { Btn, DataPreview } from "../components/ui.jsx";
+import { HintCard } from "../components/HintCard.jsx";
 
 // ── Built-in demo dataset ─────────────────────────────────────────────────────
 const DEMO_HEADERS = ["Location", "Product", "Category", "On Hand", "Daily Usage", "Lead Time (days)", "Cost"];
@@ -145,6 +146,10 @@ export function UploadStep({ onData, onManualBuild }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <HintCard id="upload-intro" title="Welcome to OrderGen">
+        Upload your inventory spreadsheet (.xlsx or .csv) and OrderGen will suggest reorder quantities based on your stock levels and daily usage.
+        No file on hand? Hit <strong>Try with demo data</strong> below to walk through the full workflow instantly.
+      </HintCard>
       <div style={{ textAlign: "center" }}>
         <h2 style={{ color: C.text, fontSize: 26, fontWeight: 800, margin: 0 }}>Upload Your Inventory File</h2>
         <p style={{ color: C.muted, marginTop: 8 }}>Accepts .xlsx, .xls, or .csv — we'll read the first sheet</p>
