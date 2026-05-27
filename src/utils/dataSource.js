@@ -1,16 +1,57 @@
 import * as XLSX from "xlsx";
+import CryptoJS from "crypto-js";
+
+// ── Sig computation (AES-256-ECB + base64) ────────────────────────────────────
+// Format: base64( AES-256-ECB( publicKey|httpMethod|unixTimestamp, privateKey ) )
+export function computeSig(publicKey, privateKey, httpMethod) {
+  const ts = Math.floor(Date.now() / 1000);
+  const payload = `${publicKey}|${httpMethod}|${ts}`;
+  const key = CryptoJS.enc.Utf8.parse(privateKey);
+  const encrypted = CryptoJS.AES.encrypt(
+    CryptoJS.enc.Utf8.parse(payload),
+    key,
+    { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }
+  );
+  return encrypted.toString(); // already base64
+}
 
 // ── Data Source utilities ─────────────────────────────────────────────────────
 export async function fetchDataSource(conn) {
+  const method = conn.method || "GET";
   const reqHeaders = {};
+
+  // ── Standard auth ──────────────────────────────────────────────────────────
   if (conn.authType === "bearer" && conn.authValue)
     reqHeaders["Authorization"] = `Bearer ${conn.authValue}`;
   if (conn.authType === "apikey" && conn.authValue)
     reqHeaders[conn.authHeader || "X-API-Key"] = conn.authValue;
 
-  const res = await fetch(buildFetchUrl(conn), { headers: reqHeaders, mode: "cors" });
+  // ── Signed auth — adds x-api-key header ───────────────────────────────────
+  if (conn.authType === "signed" && conn.sigPublicKey)
+    reqHeaders["x-api-key"] = conn.sigPublicKey;
+
+  // ── Build body params ──────────────────────────────────────────────────────
+  const bodyObj = {};
+  (conn.bodyParams || []).forEach(p => {
+    if (p.key.trim()) bodyObj[p.key.trim()] = p.value;
+  });
+
+  // Inject computed sig into body
+  if (conn.authType === "signed" && conn.sigPublicKey && conn.sigPrivateKey) {
+    bodyObj.sig = computeSig(conn.sigPublicKey, conn.sigPrivateKey, method);
+  }
+
+  // ── Fetch ──────────────────────────────────────────────────────────────────
+  const hasBody = Object.keys(bodyObj).length > 0;
+  if (hasBody) reqHeaders["Content-Type"] = "application/json";
+
+  const fetchOpts = { method, headers: reqHeaders, mode: "cors" };
+  if (hasBody) fetchOpts.body = JSON.stringify(bodyObj);
+
+  const res = await fetch(buildFetchUrl(conn), fetchOpts);
   if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
 
+  // ── Parse response ─────────────────────────────────────────────────────────
   const fmt = conn.dataFormat || "auto";
   const ct = (res.headers.get("content-type") || "").toLowerCase();
   const isJson = fmt === "json" || (fmt === "auto" && ct.includes("json"));
@@ -60,18 +101,15 @@ export function applyConnectionFilters(data, filters) {
 export function buildFetchUrl(conn) {
   const params = (conn.queryParams || []).filter(p => p.key.trim());
   if (!params.length) return conn.url;
-  const base = conn.url.includes("?") ? conn.url : conn.url;
   const sep = conn.url.includes("?") ? "&" : "?";
-  return base + sep + params.map(p => `${encodeURIComponent(p.key.trim())}=${encodeURIComponent(p.value)}`).join("&");
+  return conn.url + sep + params.map(p => `${encodeURIComponent(p.key.trim())}=${encodeURIComponent(p.value)}`).join("&");
 }
 
 // Parses a curl command and returns partial connection fields
 export function parseCurl(cmd) {
   const result = { url: "", queryParams: [], authType: "none", authHeader: "X-API-Key", authValue: "" };
-  // Strip line continuations and normalise
   const flat = cmd.replace(/\\\s*\n/g, " ").replace(/\s+/g, " ").trim();
 
-  // Extract URL — first bare https?:// or value after -X METHOD
   const urlMatch = flat.match(/['"]?(https?:\/\/[^\s'"]+)['"]?/);
   if (urlMatch) {
     try {
@@ -82,7 +120,6 @@ export function parseCurl(cmd) {
     } catch { result.url = urlMatch[1].split("?")[0]; }
   }
 
-  // Extract headers
   const headerRe = /-H\s+['"]([^'"]+)['"]/g;
   let hm;
   while ((hm = headerRe.exec(flat)) !== null) {
@@ -90,22 +127,28 @@ export function parseCurl(cmd) {
     const value = rest.join(":").trim();
     const nameLower = name.trim().toLowerCase();
     if (nameLower === "authorization") {
-      if (value.toLowerCase().startsWith("bearer ")) {
-        result.authType = "bearer";
-        result.authValue = value.slice(7).trim();
-      } else if (value.toLowerCase().startsWith("basic ")) {
-        result.authType = "bearer"; // treat basic as bearer fallback
-        result.authValue = value.slice(6).trim();
-      }
+      if (value.toLowerCase().startsWith("bearer ")) { result.authType = "bearer"; result.authValue = value.slice(7).trim(); }
+      else if (value.toLowerCase().startsWith("basic ")) { result.authType = "bearer"; result.authValue = value.slice(6).trim(); }
     } else if (nameLower === "x-api-key" || nameLower.includes("api-key") || nameLower.includes("apikey")) {
-      result.authType = "apikey";
-      result.authHeader = name.trim();
-      result.authValue = value;
+      result.authType = "apikey"; result.authHeader = name.trim(); result.authValue = value;
     }
   }
   return result;
 }
 
 export function newConnection() {
-  return { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: "", url: "", queryParams: [], authType: "none", authHeader: "X-API-Key", authValue: "", dataFormat: "auto", jsonPath: "", refreshPolicy: "manual", lastFetched: null, lastFetchOk: false, filters: [] };
+  return {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    name: "", url: "",
+    method: "GET",
+    queryParams: [],
+    bodyParams: [],
+    authType: "none", authHeader: "X-API-Key", authValue: "",
+    // Signed request (AES-256-ECB) fields
+    sigPublicKey: "", sigPrivateKey: "",
+    dataFormat: "auto", jsonPath: "",
+    refreshPolicy: "manual",
+    lastFetched: null, lastFetchOk: false,
+    filters: [],
+  };
 }

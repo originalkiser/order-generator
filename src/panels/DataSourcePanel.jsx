@@ -2,7 +2,7 @@ import { useState } from "react";
 import * as XLSX from "xlsx";
 import { useC } from "../context/theme.jsx";
 import { Btn, Input, Select, DataPreview, Badge } from "../components/ui.jsx";
-import { buildFetchUrl, fetchDataSource, applyConnectionFilters, parseCurl, newConnection } from "../utils/dataSource.js";
+import { buildFetchUrl, fetchDataSource, applyConnectionFilters, parseCurl, newConnection, computeSig } from "../utils/dataSource.js";
 import { loadConnections, saveConnections } from "../utils/storage.js";
 
 // ── Data Source Panel ─────────────────────────────────────────────────────────
@@ -214,11 +214,21 @@ export function DataSourcePanel({ onLoadData, onClose }) {
                 <Input value={editConn.name} onChange={e => setField("name", e.target.value)} placeholder="e.g. ERP Inventory Export" style={{ width: "100%" }} />
               </div>
 
-              {/* URL */}
+              {/* URL + Method */}
               <div>
                 <label style={{ color: C.muted, fontSize: 11, fontWeight: 700, display: "block", marginBottom: 6 }}>BASE URL</label>
-                <Input value={editConn.url} onChange={e => setField("url", e.target.value)} placeholder="https://..." style={{ width: "100%" }} />
-                <p style={{ color: C.muted, fontSize: 11, margin: "5px 0 0" }}>Paste the endpoint URL without query parameters. Add parameters below.</p>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  {["GET","POST","PUT"].map(m => (
+                    <button key={m} onClick={() => setField("method", m)} style={{
+                      padding: "6px 12px", borderRadius: 6, fontFamily: "monospace", fontWeight: 700, fontSize: 12, cursor: "pointer", flexShrink: 0,
+                      border: `1px solid ${(editConn.method || "GET") === m ? C.accent : C.border}`,
+                      background: (editConn.method || "GET") === m ? C.accentDim : "transparent",
+                      color: (editConn.method || "GET") === m ? C.accent : C.muted,
+                    }}>{m}</button>
+                  ))}
+                  <Input value={editConn.url} onChange={e => setField("url", e.target.value)} placeholder="https://..." style={{ flex: 1 }} />
+                </div>
+                <p style={{ color: C.muted, fontSize: 11, margin: "5px 0 0" }}>Paste the endpoint URL without query parameters. Add query params or body params below.</p>
               </div>
 
               {/* Query Parameters */}
@@ -243,22 +253,60 @@ export function DataSourcePanel({ onLoadData, onClose }) {
                 )}
               </div>
 
-              {/* Auth */}
+              {/* Body Parameters */}
               <div style={{ background: C.card, borderRadius: 10, padding: "14px 16px", border: `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <label style={{ color: C.muted, fontSize: 11, fontWeight: 700 }}>BODY PARAMETERS <span style={{ color: C.muted, fontWeight: 400 }}>({editConn.method || "GET"} request body)</span></label>
+                  {editConn.authType === "signed" && (
+                    <span style={{ color: C.purple, fontSize: 10, fontWeight: 700 }}>sig auto-injected</span>
+                  )}
+                </div>
+
+                {(editConn.bodyParams || []).map((p, i) => (
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                    <Input value={p.key} onChange={e => setField("bodyParams", editConn.bodyParams.map((x, j) => j === i ? { ...x, key: e.target.value } : x))}
+                      placeholder="parameter name" style={{ width: "100%" }} />
+                    <Input value={p.value} onChange={e => setField("bodyParams", editConn.bodyParams.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
+                      placeholder="value" style={{ width: "100%" }} />
+                    <button onClick={() => setField("bodyParams", editConn.bodyParams.filter((_, j) => j !== i))}
+                      style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "6px 10px" }}>×</button>
+                  </div>
+                ))}
+
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <Btn small variant="ghost" onClick={() => setField("bodyParams", [...(editConn.bodyParams || []), { key: "", value: "" }])}>+ Add Parameter</Btn>
+                  {!(editConn.bodyParams || []).find(p => p.key === "operation_ids") && (
+                    <Btn small variant="ghost" onClick={() => setField("bodyParams", [...(editConn.bodyParams || []), { key: "operation_ids", value: "" }])}
+                      style={{ color: C.purple, borderColor: C.purple + "55" }}>+ operation_ids</Btn>
+                  )}
+                </div>
+
+                {editConn.authType === "signed" && (editConn.bodyParams || []).length === 0 && (
+                  <p style={{ color: C.muted, fontSize: 11, margin: "8px 0 0" }}>
+                    Add <strong>operation_ids</strong> and any other params your API requires.
+                    The <strong>sig</strong> param will be added automatically.
+                  </p>
+                )}
+              </div>
+
+              {/* Auth */}
+              <div style={{ background: C.card, borderRadius: 10, padding: "14px 16px", border: `1px solid ${editConn.authType === "signed" ? C.purple + "66" : C.border}` }}>
                 <label style={{ color: C.muted, fontSize: 11, fontWeight: 700, display: "block", marginBottom: 8 }}>AUTHENTICATION</label>
-                <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-                  {[["none", "None"], ["bearer", "Bearer Token"], ["apikey", "API Key"]].map(([val, lbl]) => (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                  {[["none", "None"], ["bearer", "Bearer Token"], ["apikey", "API Key"], ["signed", "Signed (AES-256-ECB)"]].map(([val, lbl]) => (
                     <button key={val} onClick={() => setField("authType", val)} style={{
                       padding: "5px 12px", borderRadius: 6, fontFamily: "inherit", fontWeight: 700, fontSize: 11, cursor: "pointer",
-                      border: `1px solid ${editConn.authType === val ? C.accent : C.border}`,
-                      background: editConn.authType === val ? C.accentDim : "transparent",
-                      color: editConn.authType === val ? C.accent : C.muted,
+                      border: `1px solid ${editConn.authType === val ? (val === "signed" ? C.purple : C.accent) : C.border}`,
+                      background: editConn.authType === val ? (val === "signed" ? C.purpleDim : C.accentDim) : "transparent",
+                      color: editConn.authType === val ? (val === "signed" ? C.purple : C.accent) : C.muted,
                     }}>{lbl}</button>
                   ))}
                 </div>
+
                 {editConn.authType === "bearer" && (
                   <Input value={editConn.authValue} onChange={e => setField("authValue", e.target.value)} placeholder="your-token-here" style={{ width: "100%" }} />
                 )}
+
                 {editConn.authType === "apikey" && (
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 8 }}>
                     <div>
@@ -268,6 +316,50 @@ export function DataSourcePanel({ onLoadData, onClose }) {
                     <div>
                       <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>KEY VALUE</label>
                       <Input value={editConn.authValue} onChange={e => setField("authValue", e.target.value)} placeholder="your-api-key" style={{ width: "100%" }} />
+                    </div>
+                  </div>
+                )}
+
+                {editConn.authType === "signed" && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {/* Formula reference */}
+                    <div style={{ background: C.surface, borderRadius: 7, padding: "8px 12px", fontFamily: "monospace", fontSize: 11, color: C.purple, border: `1px solid ${C.border}` }}>
+                      sig = base64( AES-256-ECB( publicKey | method | unixTimestamp, privateKey ) )
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div>
+                        <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>PUBLIC KEY</label>
+                        <Input value={editConn.sigPublicKey || ""} onChange={e => setField("sigPublicKey", e.target.value)} placeholder="your-public-key" style={{ width: "100%" }} />
+                      </div>
+                      <div>
+                        <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>PRIVATE KEY</label>
+                        <input
+                          type="password"
+                          value={editConn.sigPrivateKey || ""}
+                          onChange={e => setField("sigPrivateKey", e.target.value)}
+                          placeholder="your-private-key (32 chars for AES-256)"
+                          style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontFamily: "inherit", fontSize: 13, padding: "7px 10px", outline: "none", boxSizing: "border-box" }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Live preview */}
+                    {editConn.sigPublicKey && editConn.sigPrivateKey && (() => {
+                      try {
+                        const preview = computeSig(editConn.sigPublicKey, editConn.sigPrivateKey, editConn.method || "GET");
+                        return (
+                          <div style={{ background: C.surface, borderRadius: 7, padding: "8px 12px", border: `1px solid ${C.purple}44` }}>
+                            <p style={{ color: C.muted, fontSize: 10, fontWeight: 700, margin: "0 0 4px" }}>LIVE SIG PREVIEW (changes each second)</p>
+                            <p style={{ color: C.purple, fontSize: 10, fontFamily: "monospace", margin: 0, wordBreak: "break-all" }}>{preview}</p>
+                          </div>
+                        );
+                      } catch { return null; }
+                    })()}
+
+                    <div style={{ display: "flex", gap: 16, fontSize: 11, color: C.muted, flexWrap: "wrap" }}>
+                      <span>✓ <strong style={{ color: C.text }}>x-api-key</strong> header auto-added (= public key)</span>
+                      <span>✓ <strong style={{ color: C.text }}>sig</strong> body param auto-computed on every request</span>
                     </div>
                   </div>
                 )}
