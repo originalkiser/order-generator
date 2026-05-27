@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import * as XLSX from "xlsx";
 import { useC } from "../context/theme.jsx";
 import { Btn, Input, Select, DataPreview, Badge } from "../components/ui.jsx";
@@ -18,6 +18,12 @@ export function DataSourcePanel({ onLoadData, onClose }) {
   const [newFilterCol, setNewFilterCol] = useState("");
   const [curlInput, setCurlInput] = useState("");
   const [curlOpen, setCurlOpen] = useState(false);
+  const [sigSeed, setSigSeed] = useState(0); // bump to regenerate sig preview
+  const [sigCopied, setSigCopied] = useState(false);
+  const regenSig = useCallback(() => setSigSeed(s => s + 1), []);
+  const copySig = useCallback((sig) => {
+    navigator.clipboard?.writeText(sig).then(() => { setSigCopied(true); setTimeout(() => setSigCopied(false), 2000); });
+  }, []);
 
   const saveConns = (c) => { setConnections(c); saveConnections(c); };
 
@@ -344,14 +350,34 @@ export function DataSourcePanel({ onLoadData, onClose }) {
                       </div>
                     </div>
 
-                    {/* Live preview */}
+                    {/* Live sig preview + variable breakdown */}
                     {editConn.sigPublicKey && editConn.sigPrivateKey && (() => {
                       try {
-                        const preview = computeSig(editConn.sigPublicKey, editConn.sigPrivateKey, editConn.method || "GET");
+                        const method = editConn.method || "GET";
+                        const ts = Math.floor(Date.now() / 1000) + sigSeed * 0; // sigSeed forces re-render
+                        void sigSeed; // read it so React tracks the dependency
+                        const preview = computeSig(editConn.sigPublicKey, editConn.sigPrivateKey, method);
+                        const rawPayload = `${editConn.sigPublicKey}|${method}|${Math.floor(Date.now() / 1000)}`;
                         return (
-                          <div style={{ background: C.surface, borderRadius: 7, padding: "8px 12px", border: `1px solid ${C.purple}44` }}>
-                            <p style={{ color: C.muted, fontSize: 10, fontWeight: 700, margin: "0 0 4px" }}>LIVE SIG PREVIEW (changes each second)</p>
-                            <p style={{ color: C.purple, fontSize: 10, fontFamily: "monospace", margin: 0, wordBreak: "break-all" }}>{preview}</p>
+                          <div style={{ background: C.surface, borderRadius: 7, padding: "10px 12px", border: `1px solid ${C.purple}44`, display: "flex", flexDirection: "column", gap: 8 }}>
+                            <div>
+                              <p style={{ color: C.muted, fontSize: 10, fontWeight: 700, margin: "0 0 3px" }}>PLAINTEXT PAYLOAD (before encryption)</p>
+                              <p style={{ color: C.text, fontSize: 11, fontFamily: "monospace", margin: 0, wordBreak: "break-all" }}>{rawPayload}</p>
+                            </div>
+                            <div>
+                              <p style={{ color: C.muted, fontSize: 10, fontWeight: 700, margin: "0 0 3px" }}>COMPUTED SIG (base64 · AES-256-ECB)</p>
+                              <p style={{ color: C.purple, fontSize: 10, fontFamily: "monospace", margin: 0, wordBreak: "break-all" }}>{preview}</p>
+                            </div>
+                            <div style={{ display: "flex", gap: 6 }}>
+                              <button onClick={regenSig}
+                                style={{ padding: "4px 10px", borderRadius: 5, fontFamily: "inherit", fontWeight: 700, fontSize: 11, cursor: "pointer", border: `1px solid ${C.purple}66`, background: C.purpleDim, color: C.purple }}>
+                                ↻ Regenerate
+                              </button>
+                              <button onClick={() => copySig(preview)}
+                                style={{ padding: "4px 10px", borderRadius: 5, fontFamily: "inherit", fontWeight: 700, fontSize: 11, cursor: "pointer", border: `1px solid ${C.border}`, background: "transparent", color: sigCopied ? C.green : C.muted }}>
+                                {sigCopied ? "✓ Copied!" : "⎘ Copy Sig"}
+                              </button>
+                            </div>
                           </div>
                         );
                       } catch { return null; }

@@ -148,7 +148,7 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'DM Sans', 'Segoe UI', system-ui, sans-serif", color: C.text, paddingBottom: 60 }}>
       {showDataSource && <DataSourcePanel onLoadData={handleLoadFromSource} onClose={() => setShowDataSource(false)} />}
-      <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "18px 32px", display: "flex", alignItems: "center", gap: 14, marginBottom: 40 }}>
+      <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "18px 32px", display: "flex", alignItems: "center", gap: 14, marginBottom: 40, position: "sticky", top: 0, zIndex: 100 }}>
         <img src={`${import.meta.env.BASE_URL}logo.svg`} alt="OrderGen" style={{ width: 36, height: 36, borderRadius: 10, display: "block", flexShrink: 0 }} />
         <div style={{ flex: 1 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -223,7 +223,8 @@ export default function App() {
               manualLocations={buildMode === "manual" ? manualLocations : []}
               onRowsSnapshot={handleRowsSnapshot}
               onConfirm={(rows, pos) => { setFinalRows(rows); setSavedPendingOrders(pos || []); setStep(4); }}
-              onBack={handleReviewBack} />
+              onBack={handleReviewBack}
+              onStartOver={handleNewOrder} />
           </ErrorBoundary>
         )}
         {step === 4 && finalRows && <ErrorBoundary><ExportStep rows={finalRows} onBack={() => setStep(3)} /></ErrorBoundary>}

@@ -130,24 +130,17 @@ export function DataPreview({ headers, rows, highlightCols = [], maxRows = 15 })
 
 // Callout card shown in Review step (Most Ordered / Least Ordered).
 // Module-level so React never remounts it due to a new function reference.
-export function OrderCalloutCard({ title, accentColor, theRows, mode, setMode, n, setN, sortedList, label, onSetOrder, onSetGroupOrders }) {
+export function OrderCalloutCard({ title, accentColor, theRows, n, setN, sortedList, label, onSetOrder, onSetGroupOrders }) {
   const C = useC();
   const [bulkVal, setBulkVal] = useState("");
   return (
     <div style={{ flex: 1, minWidth: 220, background: C.surface, borderRadius: 10, padding: "12px 14px", border: `1px solid ${C.border}`, overflow: "auto", minHeight: 120 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 6, flexWrap: "wrap" }}>
         <span style={{ color: C.muted, fontSize: 11, fontWeight: 700 }}>{title}</span>
-        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          <div style={{ display: "flex", gap: 3 }}>
-            {[["unit","by qty"],["group","by rank"]].map(([m,l]) => (
-              <button key={m} onClick={() => setMode(m)} style={{ padding: "2px 7px", borderRadius: 4, fontFamily: "inherit", fontWeight: 700, fontSize: 10, cursor: "pointer", border: `1px solid ${mode===m ? accentColor : C.border}`, background: mode===m ? accentColor+"33" : "transparent", color: mode===m ? accentColor : C.muted }}>{l}</button>
-            ))}
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-            <button onClick={() => setN(v => Math.max(1, v-1))} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 3, color: C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 11, width: 18, height: 18, lineHeight: 1, padding: 0 }}>−</button>
-            <span style={{ color: C.text, fontSize: 11, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{n}</span>
-            <button onClick={() => setN(v => Math.min(sortedList.length || 1, v+1))} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 3, color: C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 11, width: 18, height: 18, lineHeight: 1, padding: 0 }}>+</button>
-          </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+          <button onClick={() => setN(v => Math.max(1, v-1))} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 3, color: C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 11, width: 18, height: 18, lineHeight: 1, padding: 0 }}>−</button>
+          <span style={{ color: C.text, fontSize: 11, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{n}</span>
+          <button onClick={() => setN(v => Math.min(sortedList.length || 1, v+1))} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 3, color: C.muted, cursor: "pointer", fontFamily: "inherit", fontSize: 11, width: 18, height: 18, lineHeight: 1, padding: 0 }}>+</button>
         </div>
       </div>
       {theRows.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>—</div> : (<>

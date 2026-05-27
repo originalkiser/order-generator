@@ -8,7 +8,7 @@ import { Btn, DraftInput, Badge, Input, Select, OrderCalloutCard } from "../comp
 import { ColumnFilter } from "../components/ColumnFilter.jsx";
 import { HintCard } from "../components/HintCard.jsx";
 
-export function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manualEntry, orderLimits, uomMappings, categoryUomSettings, prefixSuffixRules, onConfirm, onBack, initialPendingOrders = [], isManualBuild = false, initialRows = null, manualLocations = [], onRowsSnapshot = null }) {
+export function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig, manualEntry, orderLimits, uomMappings, categoryUomSettings, prefixSuffixRules, onConfirm, onBack, onStartOver, initialPendingOrders = [], isManualBuild = false, initialRows = null, manualLocations = [], onRowsSnapshot = null }) {
   const hasCost = !!mapping.cost;
   const hasCategory = !!mapping.category;
   const hasUom = !!mapping.uom;
@@ -546,8 +546,6 @@ export function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig,
   const editedCount = rows.filter(r => r.order !== r.suggested).length;
 
   // Most/Least ordered callout cards — bulkVal lives inside OrderCalloutCard to avoid ReviewStep re-renders
-  const [mostMode, setMostMode] = useState("unit");
-  const [leastMode, setLeastMode] = useState("unit");
   const [mostN, setMostN] = useState(1);
   const [leastN, setLeastN] = useState(1);
 
@@ -565,12 +563,8 @@ export function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig,
   const orderedRowsCallout = rows.filter(r => !r._isTotal && (Number(r.order) || 0) > 0);
   const sortedDescCallout = [...new Set(orderedRowsCallout.map(r => Number(r.order) || 0))].sort((a, b) => b - a);
   const sortedAscCallout  = [...sortedDescCallout].reverse();
-  const mostQtysCallout = mostMode === "unit"
-    ? sortedDescCallout.filter(q => q >= sortedDescCallout[0] - (mostN - 1)).slice(0, mostN)
-    : sortedDescCallout.slice(0, mostN);
-  const leastQtysCallout = leastMode === "unit"
-    ? sortedAscCallout.filter(q => q <= sortedAscCallout[0] + (leastN - 1)).slice(0, leastN)
-    : sortedAscCallout.slice(0, leastN);
+  const mostQtysCallout  = sortedDescCallout.slice(0, mostN);
+  const leastQtysCallout = sortedAscCallout.slice(0, leastN);
   const maxRowsCallout = orderedRowsCallout.filter(r => mostQtysCallout.includes(Number(r.order) || 0));
   const minRowsCallout = orderedRowsCallout.filter(r => leastQtysCallout.includes(Number(r.order) || 0));
   const maxQtyCallout = sortedDescCallout[0] ?? null;
@@ -709,7 +703,16 @@ export function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig,
 
   const ActionBar = () => (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
-      <Btn variant="ghost" onClick={onBack}>← Back</Btn>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <Btn variant="ghost" onClick={onBack}>← Back</Btn>
+        {onStartOver && (
+          <button onClick={onStartOver} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, color: C.muted, fontFamily: "inherit", fontWeight: 700, fontSize: 13, cursor: "pointer", padding: "8px 14px" }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = C.red; e.currentTarget.style.color = C.red; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.muted; }}>
+            ↩ Start Over
+          </button>
+        )}
+      </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button onClick={() => setShowRulesPanel(v => !v)} style={{
           background: productRules.length > 0 ? C.purple + "22" : "transparent",
@@ -1096,17 +1099,17 @@ export function ReviewStep({ rawRows, headers, mapping, targetDays, usageConfig,
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <OrderCalloutCard
             title="MOST ORDERED" accentColor={C.accent}
-            theRows={maxRowsCallout} mode={mostMode} setMode={setMostMode}
+            theRows={maxRowsCallout}
             n={mostN} setN={setMostN} sortedList={sortedDescCallout}
             onSetOrder={setOrder} onSetGroupOrders={setGroupOrders}
-            label={mostMode === "unit" && mostN === 1 ? `${fmtNum(maxQtyCallout, 0)} units` : `Top ${mostN} ${mostMode === "group" ? "rank" : "qty"}${mostN > 1 ? "s" : ""}`}
+            label={mostN === 1 ? `${fmtNum(maxQtyCallout, 0)} units` : `Top ${mostN} rank${mostN > 1 ? "s" : ""}`}
           />
           <OrderCalloutCard
             title="LEAST ORDERED" accentColor={C.orange}
-            theRows={minRowsCallout.filter(() => minQtyCallout !== maxQtyCallout)} mode={leastMode} setMode={setLeastMode}
+            theRows={minRowsCallout.filter(() => minQtyCallout !== maxQtyCallout)}
             n={leastN} setN={setLeastN} sortedList={sortedAscCallout}
             onSetOrder={setOrder} onSetGroupOrders={setGroupOrders}
-            label={leastMode === "unit" && leastN === 1 ? `${fmtNum(minQtyCallout, 0)} units` : `Bottom ${leastN} ${leastMode === "group" ? "rank" : "qty"}${leastN > 1 ? "s" : ""}`}
+            label={leastN === 1 ? `${fmtNum(minQtyCallout, 0)} units` : `Bottom ${leastN} rank${leastN > 1 ? "s" : ""}`}
           />
         </div>
       )}
