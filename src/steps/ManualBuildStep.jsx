@@ -329,11 +329,30 @@ export function ManualBuildStep({ onConfirm, onBack }) {
       <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, padding: "16px 20px" }}>
         <div style={{ color: C.text, fontWeight: 700, fontSize: 14, marginBottom: 6 }}>📦 Step 2 — Add Products</div>
         <p style={{ color: C.muted, fontSize: 11, margin: "0 0 14px" }}>
-          Tab between fields · Enter on Qty to add and jump back to Product
+          Tab: Product → Qty · Enter to add and jump back to Product · click Location to change
         </p>
         <datalist id="mbs-prod-list">{existingProducts.map(p => <option key={p} value={p} />)}</datalist>
 
         <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+          {/* Location — first visually, but tabIndex={-1} so Tab skips it */}
+          {locations.length > 0 && (
+            <div style={{ flex: "2 1 160px" }}>
+              <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>LOCATION</div>
+              <select
+                ref={locSelectRef}
+                value={newLocSingle}
+                onChange={e => setNewLocSingle(e.target.value)}
+                tabIndex={-1}
+                style={{ ...selectStyle, color: newLocSingle ? C.text : C.muted }}>
+                <option value="">— no specific location —</option>
+                <option value={ALL_LOCS}>All Locations ({locations.length})</option>
+                <optgroup label="──────────────────">
+                  {locations.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+                </optgroup>
+              </select>
+            </div>
+          )}
+
           {/* Product */}
           <div style={{ flex: "2 1 150px" }}>
             <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>PRODUCT ID</div>
@@ -349,27 +368,6 @@ export function ManualBuildStep({ onConfirm, onBack }) {
               style={{ ...selectStyle, cursor: "text" }}
             />
           </div>
-
-          {/* Location — native <select> for keyboard tab/enter flow */}
-          {locations.length > 0 && (
-            <div style={{ flex: "2 1 160px" }}>
-              <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>LOCATION</div>
-              <select
-                ref={locSelectRef}
-                value={newLocSingle}
-                onChange={e => setNewLocSingle(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === "Enter") { e.preventDefault(); qtyInputRef.current?.focus(); }
-                }}
-                style={{ ...selectStyle, color: newLocSingle ? C.text : C.muted }}>
-                <option value="">— no specific location —</option>
-                <option value={ALL_LOCS}>All Locations ({locations.length})</option>
-                <optgroup label="──────────────────">
-                  {locations.map(loc => <option key={loc} value={loc}>{loc}</option>)}
-                </optgroup>
-              </select>
-            </div>
-          )}
 
           {/* Qty */}
           <div style={{ flex: "0 0 80px" }}>
