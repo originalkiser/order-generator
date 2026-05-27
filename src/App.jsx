@@ -5,7 +5,6 @@ import { loadUomMappings, loadCategoryUom, loadPrefixSuffixRules, findBestSavedM
 import { buildPendingIndex } from "./utils/calc.js";
 import { ErrorBoundary } from "./components/ui.jsx";
 import { HintsToggle } from "./components/HintCard.jsx";
-import { SnakeGame } from "./components/SnakeGame.jsx";
 import { StepBar } from "./components/StepBar.jsx";
 import { DataSourcePanel } from "./panels/DataSourcePanel.jsx";
 import { UploadStep } from "./steps/UploadStep.jsx";
@@ -36,8 +35,6 @@ export default function App() {
   });
   const [manualBuiltRows, setManualBuiltRows] = useState(_s?.manualBuiltRows ?? null);
   const [manualLocations, setManualLocations] = useState(_s?.manualLocations ?? []);
-  const [snakeOpen, setSnakeOpen] = useState(false);
-  useEffect(() => { setSnakeOpen(false); }, [step]);
   const [savedMapState, setSavedMapState] = useState(_s?.savedMapState ?? null);
   const [suggestion, setSuggestion] = useState(null);
   const [showDataSource, setShowDataSource] = useState(false);
@@ -183,8 +180,7 @@ export default function App() {
         )}
       </div>
       <div style={{ maxWidth: 1040, margin: "0 auto", padding: "0 24px" }}>
-        <StepBar current={step} buildMode={buildMode} onReviewTripleClick={() => setSnakeOpen(v => !v)} />
-        {snakeOpen && <SnakeGame onClose={() => setSnakeOpen(false)} />}
+        <StepBar current={step} buildMode={buildMode} />
         {step === 0 && <UploadStep onData={handleFileUploaded} onManualBuild={() => { setBuildMode("manual"); setStep(1); }} />}
         {step === 1 && buildMode === "manual" && (
           <ManualBuildStep onConfirm={handleManualBuildConfirm} onBack={() => { setBuildMode("upload"); setStep(0); }} />
