@@ -314,15 +314,26 @@ export function DataSourcePanel({ onLoadData, onClose }) {
                 )}
 
                 {editConn.authType === "apikey" && (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 8 }}>
-                    <div>
-                      <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>HEADER NAME</label>
-                      <Input value={editConn.authHeader} onChange={e => setField("authHeader", e.target.value)} placeholder="X-API-Key" style={{ width: "100%" }} />
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 8 }}>
+                      <div>
+                        <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>HEADER NAME</label>
+                        <Input value={editConn.authHeader} onChange={e => setField("authHeader", e.target.value)} placeholder="X-API-Key" style={{ width: "100%" }} />
+                      </div>
+                      <div>
+                        <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>KEY VALUE</label>
+                        <Input value={editConn.authValue} onChange={e => setField("authValue", e.target.value)} placeholder="your-api-key" style={{ width: "100%" }} />
+                      </div>
                     </div>
-                    <div>
-                      <label style={{ color: C.muted, fontSize: 10, fontWeight: 700, display: "block", marginBottom: 4 }}>KEY VALUE</label>
-                      <Input value={editConn.authValue} onChange={e => setField("authValue", e.target.value)} placeholder="your-api-key" style={{ width: "100%" }} />
-                    </div>
+                    <p style={{ color: C.muted, fontSize: 11, margin: 0 }}>
+                      Need a computed / signed signature?{" "}
+                      <button onClick={() => setField("authType", "signed")}
+                        style={{ background: "none", border: "none", color: C.purple, fontFamily: "inherit", fontWeight: 700, fontSize: 11, cursor: "pointer", padding: 0, textDecoration: "underline" }}>
+                        Switch to Signed (AES-256-ECB)
+                      </button>
+                      {" "}— it auto-handles <code style={{ background: C.card, padding: "1px 4px", borderRadius: 3 }}>x-api-key</code> and generates the{" "}
+                      <code style={{ background: C.card, padding: "1px 4px", borderRadius: 3 }}>sig</code> parameter.
+                    </p>
                   </div>
                 )}
 

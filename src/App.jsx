@@ -7,6 +7,7 @@ import { ErrorBoundary } from "./components/ui.jsx";
 import { HintsToggle } from "./components/HintCard.jsx";
 import { StepBar } from "./components/StepBar.jsx";
 import { DataSourcePanel } from "./panels/DataSourcePanel.jsx";
+import { BrandingPanel } from "./panels/BrandingPanel.jsx";
 import { UploadStep } from "./steps/UploadStep.jsx";
 import { ManualBuildStep, clearManualDraft } from "./steps/ManualBuildStep.jsx";
 import { MapStep } from "./steps/MapStep.jsx";
@@ -15,7 +16,7 @@ import { ReviewStep } from "./steps/ReviewStep.jsx";
 import { ExportStep } from "./steps/ExportStep.jsx";
 
 export default function App() {
-  const { C, theme, toggleTheme } = useTheme();
+  const { C, theme, toggleTheme, brandLogo } = useTheme();
   // Loaded once at mount; never changes — used only for initial state values
   const _s = useRef(loadSession()).current;
 
@@ -38,6 +39,7 @@ export default function App() {
   const [savedMapState, setSavedMapState] = useState(_s?.savedMapState ?? null);
   const [suggestion, setSuggestion] = useState(null);
   const [showDataSource, setShowDataSource] = useState(false);
+  const [showBranding, setShowBranding] = useState(false);
   const [activeConnName, setActiveConnName] = useState(_s?.activeConnName ?? null);
 
   const [uomMappings, setUomMappings] = useState(() => loadUomMappings());
@@ -149,8 +151,9 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'DM Sans', 'Segoe UI', system-ui, sans-serif", color: C.text, paddingBottom: 60 }}>
       {showDataSource && <DataSourcePanel onLoadData={handleLoadFromSource} onClose={() => setShowDataSource(false)} />}
+      {showBranding   && <BrandingPanel onClose={() => setShowBranding(false)} />}
       <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "18px 32px", display: "flex", alignItems: "center", gap: 14, marginBottom: 40, position: "sticky", top: 0, zIndex: 100 }}>
-        <img src={`${import.meta.env.BASE_URL}logo.svg`} alt="OrderGen" style={{ width: 36, height: 36, borderRadius: 10, display: "block", flexShrink: 0 }} />
+        <img src={brandLogo || `${import.meta.env.BASE_URL}logo.svg`} alt="OrderGen" style={{ width: 36, height: 36, borderRadius: 10, display: "block", flexShrink: 0, objectFit: "contain" }} />
         <div style={{ flex: 1 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontWeight: 800, fontSize: 17, letterSpacing: -0.3 }}>OrderGen</span>
@@ -166,6 +169,11 @@ export default function App() {
           onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
           onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.muted; }}>
           {theme === "dark" ? "☀" : "🌙"}
+        </button>
+        <button onClick={() => setShowBranding(true)} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, color: C.muted, fontFamily: "inherit", fontWeight: 700, fontSize: 13, cursor: "pointer", padding: "8px 16px", transition: "all .15s" }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.muted; }}>
+          🎨 Brand
         </button>
         <button onClick={() => setShowDataSource(true)} style={{ background: activeConnName ? C.accentDim : "transparent", border: `1px solid ${activeConnName ? C.accent : C.border}`, borderRadius: 8, color: activeConnName ? C.accent : C.muted, fontFamily: "inherit", fontWeight: 700, fontSize: 13, cursor: "pointer", padding: "8px 16px", transition: "all .15s" }}
           onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
