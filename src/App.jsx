@@ -8,7 +8,7 @@ import { HintsToggle } from "./components/HintCard.jsx";
 import { StepBar } from "./components/StepBar.jsx";
 import { DataSourcePanel } from "./panels/DataSourcePanel.jsx";
 import { UploadStep } from "./steps/UploadStep.jsx";
-import { ManualBuildStep } from "./steps/ManualBuildStep.jsx";
+import { ManualBuildStep, clearManualDraft } from "./steps/ManualBuildStep.jsx";
 import { MapStep } from "./steps/MapStep.jsx";
 import { UomStep } from "./steps/UomStep.jsx";
 import { ReviewStep } from "./steps/ReviewStep.jsx";
@@ -129,6 +129,7 @@ export default function App() {
 
   const handleNewOrder = () => {
     clearSession();
+    clearManualDraft();
     reviewRowsRef.current = null;
     setStep(0);
     setBuildMode("upload");

@@ -1,19 +1,33 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 import { useC } from "../context/theme.jsx";
 import { Btn, Input, DraftInput } from "../components/ui.jsx";
 
 const ALL_LOCS = "__all__";
+const DRAFT_KEY = "ordergen_manual_draft";
+
+function loadDraft() {
+  try { const s = sessionStorage.getItem(DRAFT_KEY); return s ? JSON.parse(s) : null; } catch { return null; }
+}
+function saveDraft(data) {
+  try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify(data)); } catch {}
+}
+export function clearManualDraft() {
+  try { sessionStorage.removeItem(DRAFT_KEY); } catch {}
+}
 
 export function ManualBuildStep({ onConfirm, onBack }) {
   const C = useC();
 
+  // Restore in-progress draft so a page refresh doesn't wipe the work
+  const _draft = useRef(loadDraft()).current;
+
   // ── Locations ────────────────────────────────────────────────────────────────
-  const [locations, setLocations] = useState([]);
-  const [locEntryMode, setLocEntryMode] = useState("individual"); // "individual" | "csv"
-  const [newLocInput, setNewLocInput] = useState("");
-  const [csvLocInput, setCsvLocInput] = useState("");
-  const locFileRef = useRef();
+  const [locations, setLocations]       = useState(_draft?.locations ?? []);
+  const [locEntryMode, setLocEntryMode] = useState(_draft?.locEntryMode ?? "individual");
+  const [newLocInput, setNewLocInput]   = useState("");
+  const [csvLocInput, setCsvLocInput]   = useState("");
+  const locFileRef    = useRef();
   const newLocInputRef = useRef();
 
   const addSingleLoc = () => {
@@ -21,7 +35,6 @@ export function ManualBuildStep({ onConfirm, onBack }) {
     if (!loc || locations.includes(loc)) { setNewLocInput(""); return; }
     setLocations(prev => [...prev, loc]);
     setNewLocInput("");
-    // Keep focus so user can type the next one
     newLocInputRef.current?.focus();
   };
 
@@ -38,8 +51,7 @@ export function ManualBuildStep({ onConfirm, onBack }) {
 
   const removeLocation = (loc) => {
     setLocations(prev => prev.filter(l => l !== loc));
-    // If the removed loc was selected in the entry row, clear it
-    if (newLocSingle === loc) setNewLocSingle("");
+    setSelectedLocs(prev => prev.filter(l => l !== loc));
   };
 
   const handleLocFile = (file) => {
@@ -53,7 +65,6 @@ export function ManualBuildStep({ onConfirm, onBack }) {
         const hdrs = json[0].map(h => String(h).trim());
         const dataRows = json.slice(1);
         const norm = h => h.toLowerCase().replace(/[^a-z0-9]/g, "");
-        // Detect location column — same heuristic as account file in ExportStep
         const locIdx = hdrs.findIndex(h =>
           ["location","loc","store","storename","locationname","site","name","account","accountname","accountno","accountnumber"].includes(norm(h))
         );
@@ -71,9 +82,9 @@ export function ManualBuildStep({ onConfirm, onBack }) {
   };
 
   // ── Product reference data (optional) ────────────────────────────────────────
-  const refFileRef = useRef();
-  const [refData, setRefData] = useState(null);
-  const [minDaysSupply, setMinDaysSupply] = useState(7);
+  const refFileRef   = useRef();
+  const [refData, setRefData]             = useState(null);
+  const [minDaysSupply, setMinDaysSupply] = useState(_draft?.minDaysSupply ?? 7);
 
   const handleRefFile = (file) => {
     const reader = new FileReader();
@@ -128,27 +139,40 @@ export function ManualBuildStep({ onConfirm, onBack }) {
   };
 
   // ── Product entry (keyboard-flow) ─────────────────────────────────────────────
-  const [orderEntries, setOrderEntries] = useState([]);
-  const [newProduct, setNewProduct] = useState("");
-  const [newQty, setNewQty] = useState("");
-  // Single location select — carries forward after each add
-  const [newLocSingle, setNewLocSingle] = useState("");
+  const [orderEntries, setOrderEntries] = useState(_draft?.orderEntries ?? []);
+  const [newProduct, setNewProduct]     = useState("");
+  const [newQty, setNewQty]             = useState("");
+
+  // Multi-select: array of location names. ["__all__"] means All Locations.
+  const [selectedLocs, setSelectedLocs] = useState(_draft?.selectedLocs ?? []);
 
   const productInputRef = useRef();
-  const locSelectRef    = useRef();
   const qtyInputRef     = useRef();
+
+  const toggleLoc = (loc) => {
+    setSelectedLocs(prev => {
+      if (loc === ALL_LOCS) {
+        // Toggle All — selecting All deselects everything else and vice versa
+        return prev.includes(ALL_LOCS) ? [] : [ALL_LOCS];
+      }
+      // If All was selected, switch to individual selection
+      const without = prev.filter(l => l !== ALL_LOCS);
+      return without.includes(loc) ? without.filter(l => l !== loc) : [...without, loc];
+    });
+  };
 
   const addProduct = () => {
     const prod = newProduct.trim();
     if (!prod) return;
     const qty = newQty !== "" ? Math.max(0, Number(newQty)) : (refData ? autoSuggestQty(prod) : 0);
 
-    // Expand "All" to every defined location; fall back to empty string (no location)
     let targetLocs;
-    if (newLocSingle === ALL_LOCS) {
+    if (selectedLocs.includes(ALL_LOCS)) {
       targetLocs = locations.length > 0 ? locations : [""];
+    } else if (selectedLocs.length > 0) {
+      targetLocs = selectedLocs;
     } else {
-      targetLocs = [newLocSingle];
+      targetLocs = [""];
     }
 
     setOrderEntries(prev => [
@@ -158,9 +182,14 @@ export function ManualBuildStep({ onConfirm, onBack }) {
 
     setNewProduct("");
     setNewQty("");
-    // ← Do NOT reset newLocSingle — carry the selection to the next row
+    // ← Do NOT reset selectedLocs — carry the selection forward
     setTimeout(() => productInputRef.current?.focus(), 10);
   };
+
+  // ── Persist draft on every change (skips refData — needs re-upload) ───────────
+  useEffect(() => {
+    saveDraft({ locations, orderEntries, selectedLocs, minDaysSupply, locEntryMode });
+  }, [locations, orderEntries, selectedLocs, minDaysSupply, locEntryMode]);
 
   const handleConfirm = () => {
     const rows = orderEntries.map((e, i) => {
@@ -188,16 +217,27 @@ export function ManualBuildStep({ onConfirm, onBack }) {
         vendor, _minDaysSupply: minDaysSupply,
       };
     });
+    clearManualDraft();
     onConfirm(rows, locations);
   };
 
   const existingProducts = [...new Set(orderEntries.map(e => e.product))].sort();
 
+  // ── Context hint for the location selection ───────────────────────────────────
+  const selCount = selectedLocs.includes(ALL_LOCS) ? locations.length : selectedLocs.length;
+  const selLabel = selectedLocs.includes(ALL_LOCS)
+    ? `All ${locations.length} locations`
+    : selectedLocs.length === 0
+      ? "No location"
+      : selectedLocs.length === 1
+        ? selectedLocs[0]
+        : `${selectedLocs.length} locations selected`;
+
   // ── Shared styles ─────────────────────────────────────────────────────────────
-  const selectStyle = {
+  const inputStyle = {
     background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6,
     color: C.text, fontFamily: "inherit", fontSize: 13, padding: "6px 10px",
-    outline: "none", cursor: "pointer", width: "100%",
+    outline: "none", cursor: "text", width: "100%",
   };
   const modeBtn = (label, active, onClick) => (
     <button onClick={onClick} style={{
@@ -248,7 +288,7 @@ export function ManualBuildStep({ onConfirm, onBack }) {
               onChange={e => setNewLocInput(e.target.value)}
               placeholder="Type a location name, press Enter to add…"
               onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addSingleLoc(); } }}
-              style={{ ...selectStyle, flex: 1, cursor: "text" }}
+              style={{ ...inputStyle, flex: 1 }}
             />
             <Btn small onClick={addSingleLoc} disabled={!newLocInput.trim()}>Add</Btn>
           </div>
@@ -259,7 +299,7 @@ export function ManualBuildStep({ onConfirm, onBack }) {
               onChange={e => setCsvLocInput(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addCsvLocs(); } }}
               placeholder="Store 1, Store 2, Warehouse A, …  — comma-separated, then Enter"
-              style={{ ...selectStyle, flex: 1, cursor: "text" }}
+              style={{ ...inputStyle, flex: 1 }}
             />
             <Btn small onClick={addCsvLocs} disabled={!csvLocInput.trim()}>Add All</Btn>
           </div>
@@ -329,30 +369,64 @@ export function ManualBuildStep({ onConfirm, onBack }) {
       <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, padding: "16px 20px" }}>
         <div style={{ color: C.text, fontWeight: 700, fontSize: 14, marginBottom: 6 }}>📦 Step 2 — Add Products</div>
         <p style={{ color: C.muted, fontSize: 11, margin: "0 0 14px" }}>
-          Tab: Product → Qty · Enter to add and jump back to Product · click Location to change
+          Tab: Product → Qty · Enter to add and jump back to Product · click locations below to target specific ones
         </p>
         <datalist id="mbs-prod-list">{existingProducts.map(p => <option key={p} value={p} />)}</datalist>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
-          {/* Location — first visually, but tabIndex={-1} so Tab skips it */}
-          {locations.length > 0 && (
-            <div style={{ flex: "2 1 160px" }}>
-              <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>LOCATION</div>
-              <select
-                ref={locSelectRef}
-                value={newLocSingle}
-                onChange={e => setNewLocSingle(e.target.value)}
-                tabIndex={-1}
-                style={{ ...selectStyle, color: newLocSingle ? C.text : C.muted }}>
-                <option value="">— no specific location —</option>
-                <option value={ALL_LOCS}>All Locations ({locations.length})</option>
-                <optgroup label="──────────────────">
-                  {locations.map(loc => <option key={loc} value={loc}>{loc}</option>)}
-                </optgroup>
-              </select>
+        {/* ── Location multi-select chips (click-only, Tab skips entirely) ───── */}
+        {locations.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, marginBottom: 6 }}>
+              LOCATION — click to select (multiple allowed)
             </div>
-          )}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+              {/* All chip */}
+              <button
+                tabIndex={-1}
+                onClick={() => toggleLoc(ALL_LOCS)}
+                style={{
+                  padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: 700,
+                  cursor: "pointer", fontFamily: "inherit", border: "none", outline: "none",
+                  background: selectedLocs.includes(ALL_LOCS) ? C.accent : C.card,
+                  color: selectedLocs.includes(ALL_LOCS) ? "#fff" : C.muted,
+                  boxShadow: selectedLocs.includes(ALL_LOCS) ? `0 0 0 2px ${C.accent}` : `0 0 0 1px ${C.border}`,
+                  transition: "all .12s",
+                }}>
+                All ({locations.length})
+              </button>
+              {locations.map(loc => {
+                const active = selectedLocs.includes(loc);
+                return (
+                  <button
+                    key={loc}
+                    tabIndex={-1}
+                    onClick={() => toggleLoc(loc)}
+                    style={{
+                      padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: active ? 700 : 500,
+                      cursor: "pointer", fontFamily: "inherit", border: "none", outline: "none",
+                      background: active ? C.accentDim : C.card,
+                      color: active ? C.accent : C.muted,
+                      boxShadow: active ? `0 0 0 2px ${C.accent}` : `0 0 0 1px ${C.border}`,
+                      transition: "all .12s",
+                    }}>
+                    {loc}
+                  </button>
+                );
+              })}
+              {selectedLocs.length > 0 && (
+                <button
+                  tabIndex={-1}
+                  onClick={() => setSelectedLocs([])}
+                  style={{ padding: "4px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", border: `1px dashed ${C.border}`, background: "transparent", color: C.muted, transition: "all .12s" }}>
+                  clear
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
+        {/* ── Product + Qty entry row ───────────────────────────────────────── */}
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
           {/* Product */}
           <div style={{ flex: "2 1 150px" }}>
             <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>PRODUCT ID</div>
@@ -362,10 +436,8 @@ export function ManualBuildStep({ onConfirm, onBack }) {
               onChange={e => setNewProduct(e.target.value)}
               placeholder="Product / Item #"
               list="mbs-prod-list"
-              onKeyDown={e => {
-                if (e.key === "Enter") { e.preventDefault(); addProduct(); }
-              }}
-              style={{ ...selectStyle, cursor: "text" }}
+              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addProduct(); } }}
+              style={{ ...inputStyle }}
             />
           </div>
 
@@ -379,10 +451,8 @@ export function ManualBuildStep({ onConfirm, onBack }) {
               value={newQty}
               onChange={e => setNewQty(e.target.value)}
               placeholder="0"
-              onKeyDown={e => {
-                if (e.key === "Enter") { e.preventDefault(); addProduct(); }
-              }}
-              style={{ ...selectStyle, width: "100%", cursor: "text" }}
+              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addProduct(); } }}
+              style={{ ...inputStyle, width: "100%" }}
             />
           </div>
 
@@ -391,12 +461,22 @@ export function ManualBuildStep({ onConfirm, onBack }) {
 
         {/* Context hints below the entry row */}
         <div style={{ marginTop: 8, minHeight: 18 }}>
-          {newLocSingle === ALL_LOCS && locations.length > 0 && (
+          {locations.length > 0 && selectedLocs.includes(ALL_LOCS) && (
             <p style={{ color: C.accent, fontSize: 11, margin: 0 }}>
               Will create <strong>{locations.length}</strong> rows — one per location — with qty {newQty || 0} each
             </p>
           )}
-          {locations.length > 0 && !newLocSingle && (
+          {locations.length > 0 && !selectedLocs.includes(ALL_LOCS) && selectedLocs.length > 1 && (
+            <p style={{ color: C.accent, fontSize: 11, margin: 0 }}>
+              Will create <strong>{selectedLocs.length}</strong> rows — one for each selected location
+            </p>
+          )}
+          {locations.length > 0 && !selectedLocs.includes(ALL_LOCS) && selectedLocs.length === 1 && (
+            <p style={{ color: C.muted, fontSize: 11, margin: 0 }}>
+              Location: <strong style={{ color: C.text }}>{selectedLocs[0]}</strong>
+            </p>
+          )}
+          {locations.length > 0 && selectedLocs.length === 0 && (
             <p style={{ color: C.muted, fontSize: 11, margin: 0 }}>No location selected — added as a general item</p>
           )}
           {refData && newProduct.trim() && newQty === "" && (() => {
