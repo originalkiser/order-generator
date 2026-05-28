@@ -1,19 +1,28 @@
 import { createContext, useContext, useState } from "react";
 import { DARK, LIGHT } from "../constants.js";
-import { loadBrandColors, loadBrandLogo, applyBrand } from "../utils/brand.js";
+import { loadBrandLogo, loadBrandDarkColors, loadBrandLightColors, loadBrandPalette, applyBrand } from "../utils/brand.js";
 
-const ThemeCtx = createContext({ C: DARK, theme: "dark", toggleTheme: () => {}, brandColors: {}, setBrandColors: () => {}, brandLogo: null, setBrandLogo: () => {} });
+const ThemeCtx = createContext({
+  C: DARK, theme: "dark", toggleTheme: () => {},
+  brandDarkColors: {}, setBrandDarkColors: () => {},
+  brandLightColors: {}, setBrandLightColors: () => {},
+  brandLogo: null, setBrandLogo: () => {},
+  brandPalette: [], setBrandPalette: () => {},
+});
 
 export function ThemeProvider({ children }) {
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem("ordergen_theme_v1") || "dark"; } catch { return "dark"; }
   });
 
-  const [brandColors, setBrandColors] = useState(() => loadBrandColors());
-  const [brandLogo,   setBrandLogo]   = useState(() => loadBrandLogo());
+  const [brandDarkColors,  setBrandDarkColors]  = useState(() => loadBrandDarkColors());
+  const [brandLightColors, setBrandLightColors] = useState(() => loadBrandLightColors());
+  const [brandLogo,        setBrandLogo]        = useState(() => loadBrandLogo());
+  const [brandPalette,     setBrandPalette]     = useState(() => loadBrandPalette());
 
   const baseC = theme === "light" ? LIGHT : DARK;
-  const C = applyBrand(baseC, brandColors);
+  // Apply the theme-appropriate overrides
+  const C = applyBrand(baseC, theme === "dark" ? brandDarkColors : brandLightColors);
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
@@ -22,7 +31,7 @@ export function ThemeProvider({ children }) {
   };
 
   return (
-    <ThemeCtx.Provider value={{ C, theme, toggleTheme, brandColors, setBrandColors, brandLogo, setBrandLogo }}>
+    <ThemeCtx.Provider value={{ C, theme, toggleTheme, brandDarkColors, setBrandDarkColors, brandLightColors, setBrandLightColors, brandLogo, setBrandLogo, brandPalette, setBrandPalette }}>
       {children}
     </ThemeCtx.Provider>
   );

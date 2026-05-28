@@ -153,7 +153,7 @@ export default function App() {
       {showDataSource && <DataSourcePanel onLoadData={handleLoadFromSource} onClose={() => setShowDataSource(false)} />}
       {showBranding   && <BrandingPanel onClose={() => setShowBranding(false)} />}
       <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "18px 32px", display: "flex", alignItems: "center", gap: 14, marginBottom: 40, position: "sticky", top: 0, zIndex: 100 }}>
-        <img src={brandLogo || `${import.meta.env.BASE_URL}logo.svg`} alt="OrderGen" style={{ width: 36, height: 36, borderRadius: 10, display: "block", flexShrink: 0, objectFit: "contain" }} />
+        <img src={`${import.meta.env.BASE_URL}logo.svg`} alt="OrderGen" style={{ width: 36, height: 36, borderRadius: 10, display: "block", flexShrink: 0 }} />
         <div style={{ flex: 1 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontWeight: 800, fontSize: 17, letterSpacing: -0.3 }}>OrderGen</span>
@@ -238,6 +238,13 @@ export default function App() {
         )}
         {step === 4 && finalRows && <ErrorBoundary><ExportStep rows={finalRows} onBack={() => setStep(3)} /></ErrorBoundary>}
       </div>
+
+      {/* Company logo watermark — bottom-right corner */}
+      {brandLogo && (
+        <div style={{ position: "fixed", bottom: 18, right: 18, zIndex: 50, pointerEvents: "none", lineHeight: 0 }}>
+          <img src={brandLogo} alt="Company Logo" style={{ maxWidth: 140, maxHeight: 70, objectFit: "contain", opacity: 0.82, filter: "drop-shadow(0 2px 6px rgba(0,0,0,0.35))" }} />
+        </div>
+      )}
     </div>
   );
 }
