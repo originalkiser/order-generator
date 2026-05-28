@@ -117,26 +117,33 @@ export function autoAssignColors(paletteHexes, isDark) {
   const result = {};
 
   if (isDark) {
-    // Backgrounds: darkest
+    // Backgrounds: darkest palette colours
     result.bg      = byLum[0]?.hex;
     if (n>=2) result.surface = byLum[1].hex;
     if (n>=3) result.card    = byLum[2].hex;
-    // Text: lightest
-    result.text  = byLum[n-1]?.hex;
-    if (n>=2) result.muted = byLum[Math.max(0,n-2)].hex;
   } else {
-    // Backgrounds: lightest
+    // Backgrounds: lightest palette colours
     result.bg      = byLum[n-1]?.hex;
     if (n>=2) result.surface = byLum[n-2].hex;
     if (n>=3) result.card    = byLum[n-3].hex;
-    // Text: darkest
-    result.text  = byLum[0]?.hex;
-    if (n>=2) result.muted = byLum[Math.min(1,n-1)].hex;
   }
 
-  // Accents: most saturated vivid colours
+  // Accents: most saturated vivid colours from palette
   if (vivids[0]) result.accent = vivids[0].hex;
   if (vivids[1]) result.purple = vivids[1].hex;
+
+  // Text and muted are DERIVED from the assigned backgrounds — never taken from the
+  // user's palette. This guarantees readability without touching any uploaded colour.
+  const bgHex   = result.bg      || (isDark ? "#0f1117" : "#f0f2f8");
+  const surfHex = result.surface || bgHex;
+
+  // text = white or black, whichever contrasts more strongly with the background
+  result.text = contrastRatio("#ffffff", bgHex) >= contrastRatio("#111111", bgHex)
+    ? "#ffffff"
+    : "#111111";
+
+  // muted = 50% blend of text into surface — softer but still readable
+  result.muted = mixColors(result.text, surfHex, 0.5);
 
   // Border: blend between surface and bg
   const surf = result.surface || result.bg;
@@ -144,47 +151,54 @@ export function autoAssignColors(paletteHexes, isDark) {
   if (surf && bg && surf!==bg) result.border = mixColors(surf, bg, isDark?0.6:0.5);
   else if (surf) result.border = mixColors(surf, isDark?"#ffffff":"#000000", 0.12);
 
-  // Sanity: remove slots where fg===bg
-  if (result.text===result.bg)         delete result.text;
-  if (result.muted===result.surface)   delete result.muted;
+  // Sanity: if accent is invisible against its background, drop it (don't modify it)
   if (result.accent===result.bg || result.accent===result.surface) delete result.accent;
   // Remove undefined
   Object.keys(result).forEach(k => { if (!result[k]) delete result[k]; });
   return result;
 }
 
-// ── Auto-correct low-contrast text slots ─────────────────────────────────────
-// Returns { assignments, corrections[] } — threshold 70 means score(ratio) < 70 → fix
+// ── Auto-correct low-contrast slots ──────────────────────────────────────────
+// text/muted are now derived (not palette colours), so they're always correct.
+// This function guards only the accent/secondary slots — user-chosen vivid colours
+// that might not contrast well enough against the surface they appear on.
+// Returns { assignments, corrections[] }
 export function autoCorrectContrast(assignments, threshold = 70) {
   const result = { ...assignments };
   const corrections = [];
 
-  // Whichever of pure-white/pure-black contrasts more against bgHex
-  const bestFg = (bgHex) =>
-    contrastRatio("#ffffff", bgHex) >= contrastRatio("#111111", bgHex) ? "#ffffff" : "#111111";
+  // For accent slots: if their score against the surface they sit on is below
+  // threshold, we override the DERIVED text/muted to work — we still never touch
+  // the user's palette colour itself.
+  // Guard: re-derive text/muted if the surface changed after assignment.
+  const surfHex = result.surface || result.bg;
+  const bgHex   = result.bg;
 
-  const tryFix = (textSlot, bgSlot) => {
-    if (!result[textSlot] || !result[bgSlot]) return;
-    const ratio = contrastRatio(result[textSlot], result[bgSlot]);
-    const score = contrastScore(ratio);
-    if (score < threshold) {
-      const oldColor = result[textSlot];
-      const newColor = bestFg(result[bgSlot]);
-      result[textSlot] = newColor;
-      corrections.push({
-        slot: textSlot,
-        bgSlot,
-        oldColor,
-        newColor,
-        oldScore: score,
-        newScore: contrastScore(contrastRatio(newColor, result[bgSlot])),
-      });
-    }
-  };
+  if (surfHex && bgHex) {
+    // Re-derive text against bg to be safe (e.g., if fine-tune changed bg)
+    const derivedText = contrastRatio("#ffffff", bgHex) >= contrastRatio("#111111", bgHex)
+      ? "#ffffff" : "#111111";
+    const derivedMuted = mixColors(derivedText, surfHex, 0.5);
 
-  tryFix("text",  "bg");
-  tryFix("text",  "surface");
-  tryFix("muted", "surface");
+    const checkAndNote = (slot, derived, bgSlot, bgColor) => {
+      if (!result[slot] || !bgColor) return;
+      const ratio = contrastRatio(result[slot], bgColor);
+      const score = contrastScore(ratio);
+      if (score < threshold) {
+        const oldColor = result[slot];
+        result[slot] = derived;
+        corrections.push({
+          slot, bgSlot,
+          oldColor, newColor: derived,
+          oldScore: score,
+          newScore: contrastScore(contrastRatio(derived, bgColor)),
+        });
+      }
+    };
+
+    checkAndNote("text",  derivedText,  "bg",      bgHex);
+    checkAndNote("muted", derivedMuted, "surface",  surfHex);
+  }
 
   return { assignments: result, corrections };
 }
