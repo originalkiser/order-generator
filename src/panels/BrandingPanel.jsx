@@ -2,9 +2,9 @@ import { useState, useRef, useCallback } from "react";
 import { useTheme } from "../context/theme.jsx";
 import {
   BRAND_COLOR_DEFS,
-  contrastRatio, wcagRating, mixColors,
+  contrastRatio, wcagRating, contrastScore, mixColors,
   parseColorInput, fmtHex,
-  autoAssignColors, removeBackground,
+  autoAssignColors, autoCorrectContrast, removeBackground,
   saveBrandDarkColors, saveBrandLightColors, saveBrandLogo, saveBrandPalette,
 } from "../utils/brand.js";
 
@@ -86,10 +86,12 @@ function SlotRow({ def, palette, value, onChange, C }) {
         {def.checkAgainst.map(([bgKey, bgLabel]) => {
           const bg = palette[bgKey]; if (!bg) return null;
           const ratio = contrastRatio(value, bg);
+          const sc = contrastScore(ratio);
           const { label, color } = wcagRating(ratio);
           return (
             <span key={bgKey} style={{ fontSize:10, fontWeight:700, padding:"2px 7px", borderRadius:20, background:color+"18", border:`1px solid ${color}44`, color }}>
-              {bgLabel} · {ratio.toFixed(1)}:1 {label}
+              {bgLabel} · {ratio.toFixed(1)}:1 · <strong>{sc}%</strong> {label}
+              {sc < 70 && " ⚠"}
             </span>
           );
         })}
@@ -100,32 +102,61 @@ function SlotRow({ def, palette, value, onChange, C }) {
 }
 
 // ── Assignment result mini-grid ───────────────────────────────────────────────
-function AssignmentGrid({ assignments, baseC, label, C }) {
+const SCORE_BG_PAIRS = [["text","bg"],["text","surface"],["muted","surface"],["accent","surface"]];
+
+function AssignmentGrid({ assignments, label, corrections = [], C }) {
   const slots = Object.keys(SLOT_LABELS).filter(k => assignments[k]);
   if (!slots.length) return null;
   return (
-    <div style={{ background: C.card, borderRadius: 8, padding: "10px 12px" }}>
-      <div style={{ color: C.muted, fontSize: 10, fontWeight: 700, marginBottom: 8 }}>{label}</div>
+    <div style={{ background: C.card, borderRadius: 8, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ color: C.muted, fontSize: 10, fontWeight: 700 }}>{label}</div>
+
+      {/* Swatch row */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
         {slots.map(k => {
           const hex = assignments[k];
+          const corrected = corrections.find(c => c.slot === k);
           return (
             <div key={k} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-              <div style={{ width: 28, height: 28, borderRadius: 6, background: hex, border: `2px solid ${C.border}`, boxShadow: "0 1px 4px #0004" }} title={hex} />
-              <span style={{ color: C.muted, fontSize: 9, fontWeight: 700 }}>{SLOT_LABELS[k]}</span>
+              <div style={{ width: 28, height: 28, borderRadius: 6, background: hex, border: `2px solid ${corrected ? "#f59e0b" : C.border}`, boxShadow: "0 1px 4px #0004", position: "relative" }} title={hex}>
+                {corrected && <div style={{ position: "absolute", top: -5, right: -5, width: 10, height: 10, borderRadius: "50%", background: "#f59e0b", fontSize: 7, display: "flex", alignItems: "center", justifyContent: "center", color: "#000" }}>✓</div>}
+              </div>
+              <span style={{ color: corrected ? "#f59e0b" : C.muted, fontSize: 9, fontWeight: 700 }}>{SLOT_LABELS[k]}</span>
             </div>
           );
         })}
       </div>
-      {/* Key contrast checks */}
-      {assignments.text && assignments.bg && (
-        <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 5 }}>
-          {[["text","bg","Text/BG"],["accent","surface","Accent/Surface"],["muted","surface","Muted/Surface"]].map(([a,b,lbl]) => {
-            if (!assignments[a] || !assignments[b]) return null;
-            const r = contrastRatio(assignments[a], assignments[b]);
-            const { label: wl, color: wc } = wcagRating(r);
-            return <span key={lbl} style={{ fontSize:10, fontWeight:700, padding:"2px 7px", borderRadius:20, background:wc+"18", border:`1px solid ${wc}44`, color:wc }}>{lbl} · {r.toFixed(1)}:1 {wl}</span>;
-          })}
+
+      {/* Contrast score badges for key pairs */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+        {SCORE_BG_PAIRS.map(([a, b]) => {
+          if (!assignments[a] || !assignments[b]) return null;
+          const r = contrastRatio(assignments[a], assignments[b]);
+          const sc = contrastScore(r);
+          const { label: wl, color: wc } = wcagRating(r);
+          return (
+            <span key={a+b} style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: wc + "18", border: `1px solid ${wc}44`, color: wc }}>
+              {SLOT_LABELS[a]}/{SLOT_LABELS[b]} · {r.toFixed(1)}:1 · <strong>{sc}%</strong> {wl}
+            </span>
+          );
+        })}
+      </div>
+
+      {/* Correction notices */}
+      {corrections.length > 0 && (
+        <div style={{ background: "#f59e0b18", border: "1px solid #f59e0b44", borderRadius: 6, padding: "7px 10px" }}>
+          <div style={{ color: "#f59e0b", fontWeight: 700, fontSize: 11, marginBottom: 4 }}>
+            ✨ Auto-corrected {corrections.length} low-contrast slot{corrections.length > 1 ? "s" : ""} (score &lt; 70%)
+          </div>
+          {corrections.map((c, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: C.muted, marginTop: 3 }}>
+              <div style={{ width: 10, height: 10, borderRadius: 2, background: c.oldColor, border: `1px solid ${C.border}`, flexShrink: 0 }} />
+              <span>{SLOT_LABELS[c.slot]} was {c.oldScore}%</span>
+              <span>→</span>
+              <div style={{ width: 10, height: 10, borderRadius: 2, background: c.newColor, border: `1px solid ${C.border}`, flexShrink: 0 }} />
+              <span style={{ color: "#22c55e" }}>{c.newScore}% against {SLOT_LABELS[c.bgSlot]}</span>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -145,9 +176,11 @@ export function BrandingPanel({ onClose }) {
   // Palette state
   const [palette, setPaletteState] = useState(() => brandPalette.length ? brandPalette : []);
 
-  // Last auto-assign results (shown after clicking)
-  const [lastDark,  setLastDark]  = useState(null);
-  const [lastLight, setLastLight] = useState(null);
+  // Last auto-assign results + corrections (shown after clicking)
+  const [lastDark,         setLastDark]         = useState(null);
+  const [lastLight,        setLastLight]        = useState(null);
+  const [lastDarkCorr,     setLastDarkCorr]     = useState([]);
+  const [lastLightCorr,    setLastLightCorr]    = useState([]);
 
   // Fine-tune panel open
   const [showFineTune, setShowFineTune] = useState(false);
@@ -202,23 +235,28 @@ export function BrandingPanel({ onClose }) {
 
   // ── Auto-assign ────────────────────────────────────────────────────────────
   const assignDark = useCallback(() => {
-    const a = autoAssignColors(palette, true);
-    setBrandDarkColors(a); saveBrandDarkColors(a);
-    setLastDark(a);
+    const raw = autoAssignColors(palette, true);
+    const { assignments, corrections } = autoCorrectContrast(raw);
+    setBrandDarkColors(assignments); saveBrandDarkColors(assignments);
+    setLastDark(assignments); setLastDarkCorr(corrections);
   }, [palette, setBrandDarkColors]);
 
   const assignLight = useCallback(() => {
-    const a = autoAssignColors(palette, false);
-    setBrandLightColors(a); saveBrandLightColors(a);
-    setLastLight(a);
+    const raw = autoAssignColors(palette, false);
+    const { assignments, corrections } = autoCorrectContrast(raw);
+    setBrandLightColors(assignments); saveBrandLightColors(assignments);
+    setLastLight(assignments); setLastLightCorr(corrections);
   }, [palette, setBrandLightColors]);
 
   const assignBoth = useCallback(() => {
-    const dark  = autoAssignColors(palette, true);
-    const light = autoAssignColors(palette, false);
-    setBrandDarkColors(dark);  saveBrandDarkColors(dark);
+    const rawDark  = autoAssignColors(palette, true);
+    const rawLight = autoAssignColors(palette, false);
+    const { assignments: dark,  corrections: darkCorr  } = autoCorrectContrast(rawDark);
+    const { assignments: light, corrections: lightCorr } = autoCorrectContrast(rawLight);
+    setBrandDarkColors(dark);   saveBrandDarkColors(dark);
     setBrandLightColors(light); saveBrandLightColors(light);
-    setLastDark(dark); setLastLight(light);
+    setLastDark(dark); setLastDarkCorr(darkCorr);
+    setLastLight(light); setLastLightCorr(lightCorr);
   }, [palette, setBrandDarkColors, setBrandLightColors]);
 
   // ── Fine-tune: current active overrides ───────────────────────────────────
@@ -237,7 +275,8 @@ export function BrandingPanel({ onClose }) {
     setBrandLightColors({}); saveBrandLightColors({});
     setBrandLogo(null);      saveBrandLogo(null);
     updatePalette([]);
-    setLastDark(null); setLastLight(null);
+    setLastDark(null); setLastDarkCorr([]);
+    setLastLight(null); setLastLightCorr([]);
   };
 
   // Build the live palette object (base + active overrides) for contrast checks in fine-tune
@@ -368,8 +407,8 @@ export function BrandingPanel({ onClose }) {
                 {/* Assignment result previews */}
                 {(lastDark || lastLight) && (
                   <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-                    {lastDark  && <AssignmentGrid assignments={lastDark}  baseC={C} label="🌙 DARK MODE ASSIGNMENTS"  C={C} />}
-                    {lastLight && <AssignmentGrid assignments={lastLight} baseC={C} label="☀ LIGHT MODE ASSIGNMENTS" C={C} />}
+                    {lastDark  && <AssignmentGrid assignments={lastDark}  corrections={lastDarkCorr}  label="🌙 DARK MODE ASSIGNMENTS"  C={C} />}
+                    {lastLight && <AssignmentGrid assignments={lastLight} corrections={lastLightCorr} label="☀ LIGHT MODE ASSIGNMENTS" C={C} />}
                     <p style={{ color:C.muted, fontSize:11, margin:0 }}>
                       Applied! Switch themes with the ☀/🌙 button in the header to see each mode. Fine-tune below if needed.
                     </p>

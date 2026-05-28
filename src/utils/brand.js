@@ -80,6 +80,11 @@ export function wcagRating(ratio) {
   return            { label:"Fails",       color:"#ef4444", ok:false };
 }
 
+// Score 0-100 where 70 = WCAG AAA (7:1) and 100 = 10:1+
+export function contrastScore(ratio) {
+  return Math.min(100, Math.round(ratio / 10 * 100));
+}
+
 export function mixColors(hex1, hex2, ratio=0.3) {
   const [r1,g1,b1]=hexToRgb(hex1), [r2,g2,b2]=hexToRgb(hex2);
   const clamp=v=>Math.min(255,Math.max(0,Math.round(v)));
@@ -148,6 +153,42 @@ export function autoAssignColors(paletteHexes, isDark) {
   return result;
 }
 
+// ── Auto-correct low-contrast text slots ─────────────────────────────────────
+// Returns { assignments, corrections[] } — threshold 70 means score(ratio) < 70 → fix
+export function autoCorrectContrast(assignments, threshold = 70) {
+  const result = { ...assignments };
+  const corrections = [];
+
+  // Whichever of pure-white/pure-black contrasts more against bgHex
+  const bestFg = (bgHex) =>
+    contrastRatio("#ffffff", bgHex) >= contrastRatio("#111111", bgHex) ? "#ffffff" : "#111111";
+
+  const tryFix = (textSlot, bgSlot) => {
+    if (!result[textSlot] || !result[bgSlot]) return;
+    const ratio = contrastRatio(result[textSlot], result[bgSlot]);
+    const score = contrastScore(ratio);
+    if (score < threshold) {
+      const oldColor = result[textSlot];
+      const newColor = bestFg(result[bgSlot]);
+      result[textSlot] = newColor;
+      corrections.push({
+        slot: textSlot,
+        bgSlot,
+        oldColor,
+        newColor,
+        oldScore: score,
+        newScore: contrastScore(contrastRatio(newColor, result[bgSlot])),
+      });
+    }
+  };
+
+  tryFix("text",  "bg");
+  tryFix("text",  "surface");
+  tryFix("muted", "surface");
+
+  return { assignments: result, corrections };
+}
+
 // ── Background removal (canvas BFS flood-fill from edges) ────────────────────
 export function removeBackground(dataUrl, mimeType="") {
   return new Promise(resolve => {
@@ -188,8 +229,27 @@ export function removeBackground(dataUrl, mimeType="") {
         if (d[i+3]===0||isBg(i)) { visited[pos]=1; d[i+3]=0; queue.push(pos); }
         else { visited[pos]=2; }
       };
+      // Pass 1: BFS from all edge pixels — removes exterior background
       for (let x=0;x<w;x++) { enq(x); enq((h-1)*w+x); }
       for (let y=1;y<h-1;y++) { enq(y*w); enq(y*w+(w-1)); }
+      while (qi<queue.length) {
+        const pos=queue[qi++]; const x=pos%w, y=Math.floor(pos/w);
+        if (x>0)   enq(pos-1);
+        if (x<w-1) enq(pos+1);
+        if (y>0)   enq(pos-w);
+        if (y<h-1) enq(pos+w);
+      }
+
+      // Pass 2: enclosed interior holes (inside 'o', 'e', 'b', circles, etc.)
+      // Any unvisited pixel that is still background-coloured was never reachable
+      // from the edges — it lives inside a letter or shape counter.
+      // Seed each such pixel into the same queue and continue the BFS.
+      for (let pos=0; pos<w*h; pos++) {
+        if (visited[pos]===0) {
+          const i=pos*4;
+          if (d[i+3]>0 && isBg(i)) enq(pos);
+        }
+      }
       while (qi<queue.length) {
         const pos=queue[qi++]; const x=pos%w, y=Math.floor(pos/w);
         if (x>0)   enq(pos-1);
